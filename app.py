@@ -348,6 +348,22 @@ if not api_key:
     st.info("왼쪽 사이드바에 OpenDART API 키를 입력하면 시작할 수 있습니다.")
     st.stop()
 
+# 이전 검색이 Stop 등으로 중단됐다면, 백그라운드에 남아있는 요청들이 정리될 시간을 줌
+COOLDOWN_SEC = 65
+if st.session_state.get("still_running", False):
+    elapsed = time.time() - st.session_state.get("last_dispatch_ts", 0)
+    remaining = COOLDOWN_SEC - elapsed
+    if remaining > 0:
+        st.warning(
+            f"⏳ 이전 검색이 중간에 중단된 것 같습니다. 백그라운드에 남아있는 요청이 "
+            f"정리될 때까지 약 **{int(remaining)}초** 더 기다려주세요. "
+            "(이 시간 안에 다시 검색하면 서로 꼬여서 더 오래 걸릴 수 있어요)"
+        )
+        time.sleep(1)
+        st.rerun()
+    else:
+        st.session_state["still_running"] = False
+
 if run_btn:
     st.session_state["enter_pressed_search"] = False
     with st.spinner("KRX 상장법인 목록 로딩 중... (최초 1회, 캐시되어 다음부터는 빠릅니다)"):
@@ -377,6 +393,8 @@ if run_btn:
         pass
 
     candidates = kind_df.copy()
+    st.session_state["still_running"] = True
+    st.session_state["last_dispatch_ts"] = time.time()
     kw_list = [k.strip() for k in industry_keywords.split(',') if k.strip()]
     wl_list = [k.strip() for k in whitelist_names.split(',') if k.strip()]
 
@@ -412,6 +430,7 @@ if run_btn:
 
     if len(candidates) == 0:
         st.warning("조건에 맞는 후보가 없습니다. 필터를 완화해보세요.")
+        st.session_state["still_running"] = False
         st.stop()
 
     # 회사 하나하나마다 반복되는 요청이라, 재시도/타임아웃을 가볍게 해서
@@ -421,7 +440,8 @@ if run_btn:
     progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
     rows = [row for _, row in candidates.iterrows()]
     results = []
-    with ThreadPoolExecutor(max_workers=int(max_workers)) as executor:
+    executor = ThreadPoolExecutor(max_workers=int(max_workers))
+    try:
         future_map = {}
         for row in rows:
             code = row['종목코드']
@@ -445,11 +465,16 @@ if run_btn:
             })
             done += 1
             progress.progress(done / len(future_map), text=f"매출/영업이익/순이익 조회 중... ({done}/{len(future_map)})")
+    finally:
+        # Stop 버튼 등으로 중단되더라도, 아직 시작 안 한 대기 작업은 즉시 취소해서
+        # 다음 검색이 밀리지 않도록 함 (이미 시작된 요청은 자연 종료될 때까지 어쩔 수 없음)
+        executor.shutdown(wait=False, cancel_futures=True)
     progress.empty()
 
     df_result = pd.DataFrame(results)
     if df_result.empty:
         st.warning("매출 데이터를 확보한 회사가 없습니다.")
+        st.session_state["still_running"] = False
         st.stop()
 
     no_data = df_result[df_result['매출액_억'].isna()]
@@ -472,6 +497,7 @@ if run_btn:
 
     if len(filtered) == 0:
         st.warning("조건에 맞는 회사가 없습니다. 필터를 완화해보세요.")
+        st.session_state["still_running"] = False
         st.stop()
 
     progress2 = st.progress(0.0, text="주소/설립일 조회 중...")
@@ -479,20 +505,24 @@ if run_btn:
     details = [None] * len(corp_codes)
     employees = [None] * len(corp_codes)
 
-    with ThreadPoolExecutor(max_workers=int(max_workers)) as executor:
-        future_map = {executor.submit(get_company_detail, session, api_key, cc): i for i, cc in enumerate(corp_codes)}
+    executor2 = ThreadPoolExecutor(max_workers=int(max_workers))
+    try:
+        future_map = {executor2.submit(get_company_detail, session, api_key, cc): i for i, cc in enumerate(corp_codes)}
         done = 0
         for fut in as_completed(future_map):
             idx = future_map[fut]
             details[idx] = fut.result()
             done += 1
             progress2.progress(done / len(corp_codes), text=f"주소/설립일 조회 중... ({done}/{len(corp_codes)})")
+    finally:
+        executor2.shutdown(wait=False, cancel_futures=True)
     progress2.empty()
 
     if fetch_employees:
         progress3 = st.progress(0.0, text="직원수 조회 중...")
-        with ThreadPoolExecutor(max_workers=int(max_workers)) as executor:
-            future_map = {executor.submit(get_employee_count, session, api_key, cc, bsns_year, "11011"): i
+        executor3 = ThreadPoolExecutor(max_workers=int(max_workers))
+        try:
+            future_map = {executor3.submit(get_employee_count, session, api_key, cc, bsns_year, "11011"): i
                           for i, cc in enumerate(corp_codes)}
             done = 0
             for fut in as_completed(future_map):
@@ -500,6 +530,8 @@ if run_btn:
                 employees[idx] = fut.result()
                 done += 1
                 progress3.progress(done / len(corp_codes), text=f"직원수 조회 중... ({done}/{len(corp_codes)})")
+        finally:
+            executor3.shutdown(wait=False, cancel_futures=True)
         progress3.empty()
     else:
         st.caption("직원수 조회를 건너뛰었습니다 (체크박스 꺼짐). 직원수 칸은 비어있게 나옵니다.")
@@ -568,5 +600,6 @@ if run_btn:
         file_name="screener_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    st.session_state["still_running"] = False
 else:
     st.info("왼쪽에서 조건을 입력하고 '검색 실행' 버튼을 누르세요.")
