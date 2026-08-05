@@ -134,7 +134,7 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
         if data.get('status') != '000':
             reason = f"OpenDART 응답: {data.get('status')} - {data.get('message', '')}"
             return None, None, None, reason
-        revenue = op_profit = net_income = None
+        revenue = revenue_fallback = op_profit = net_income = None
         for it in data.get('list', []):
             nm = it.get('account_nm', '')
             amt_str = it.get('thstrm_amount', '').replace(',', '')
@@ -144,10 +144,20 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
                 continue
             if nm in ('매출액', '수익(매출액)') and revenue is None:
                 revenue = amt
+            elif nm == '영업수익' and revenue_fallback is None:
+                # 보험/증권/지주회사 등은 매출액 대신 '영업수익'으로 표기하는 경우가 많음
+                revenue_fallback = amt
             elif nm == '영업이익' and op_profit is None:
                 op_profit = amt
             elif nm in ('당기순이익', '당기순이익(손실)') and net_income is None:
                 net_income = amt
+        if revenue is None and revenue_fallback is not None:
+            revenue = revenue_fallback
+        if revenue is None:
+            return None, op_profit, net_income, (
+                "OpenDART 응답은 정상이지만 '매출액'에 해당하는 계정을 못 찾음 "
+                "(계정명이 다르게 표기됐을 수 있음)"
+            )
         return revenue, op_profit, net_income, None
     except Exception as e:
         return None, None, None, f"연결 오류: {e}"
@@ -230,7 +240,13 @@ with st.sidebar:
         "업종/주요제품 키워드 검색 (콤마로 구분, 위 목록에 없는 것도 잡고 싶을 때)", ""
     )
     whitelist_names = st.text_input("강제 포함 회사명 (콤마로 구분)", "")
-    company_name_search = st.text_input("회사명 검색", "")
+    def _trigger_search_on_enter():
+        st.session_state["enter_pressed_search"] = True
+
+    company_name_search = st.text_input(
+        "회사명 검색 (입력 후 Enter를 누르면 바로 검색됩니다)", "",
+        key="company_name_search_input", on_change=_trigger_search_on_enter,
+    )
     ceo_name_search = st.text_input("대표자명 검색", "")
     market_filter = st.multiselect("시장구분", ["KOSPI", "KOSDAQ", "KONEX"], default=[])
     settlement_month = st.text_input("결산월 (예: 12)", "")
@@ -265,13 +281,15 @@ with st.sidebar:
     top_n = st.number_input("최대 결과 개수", 1, 500, 100)
     max_workers = st.number_input("동시 요청 수", 1, 30, 5)
 
-    run_btn = st.button("🚀 검색 실행", type="primary", use_container_width=True)
+    run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
+    run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
 
 if not api_key:
     st.info("왼쪽 사이드바에 OpenDART API 키를 입력하면 시작할 수 있습니다.")
     st.stop()
 
 if run_btn:
+    st.session_state["enter_pressed_search"] = False
     with st.spinner("KRX 상장법인 목록 로딩 중... (최초 1회, 캐시되어 다음부터는 빠릅니다)"):
         try:
             kind_df = load_kind_listing()
