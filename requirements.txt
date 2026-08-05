@@ -1,0 +1,8 @@
+streamlit>=1.29
+pandas
+requests
+openpyxl
+lxml
+html5lib
+beautifulsoup4
+finance-datareader
