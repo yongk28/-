@@ -29,12 +29,13 @@ import streamlit as st
 st.set_page_config(page_title="기업 스크리너", layout="wide")
 
 
-def make_session():
-    """일시적인 연결 끊김에 대비해 재시도 로직이 포함된 세션 생성"""
+def make_session(total=8, backoff_factor=1.5):
+    """일시적인 연결 끊김에 대비해 재시도 로직이 포함된 세션 생성.
+    total/backoff_factor를 낮추면 실패 시 더 빨리 포기하고 넘어갑니다."""
     s = requests.Session()
     retry = Retry(
-        total=5,
-        backoff_factor=1.5,  # 1.5s, 3s, 4.5s, 6s, 7.5s 간격으로 재시도
+        total=total,
+        backoff_factor=backoff_factor,
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
     )
@@ -118,11 +119,11 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year,
               "reprt_code": reprt_code, "fs_div": "CFS"}
     try:
-        r = session.get(url, params=params, timeout=10)
+        r = session.get(url, params=params, timeout=12)
         data = r.json()
         if data.get('status') != '000':
             params['fs_div'] = 'OFS'
-            r = session.get(url, params=params, timeout=10)
+            r = session.get(url, params=params, timeout=12)
             data = r.json()
         if data.get('status') != '000':
             return None, None, None
@@ -149,7 +150,7 @@ def get_company_detail(session, api_key, corp_code):
     url = "https://opendart.fss.or.kr/api/company.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code}
     try:
-        r = session.get(url, params=params, timeout=10)
+        r = session.get(url, params=params, timeout=12)
         data = r.json()
         if data.get('status') == '000':
             return data.get('adres', ''), data.get('est_dt', '')
@@ -162,7 +163,7 @@ def get_employee_count(session, api_key, corp_code, bsns_year, reprt_code):
     url = "https://opendart.fss.or.kr/api/empSttus.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code}
     try:
-        r = session.get(url, params=params, timeout=10)
+        r = session.get(url, params=params, timeout=12)
         data = r.json()
         if data.get('status') != '000':
             return None
@@ -316,7 +317,9 @@ if run_btn:
         st.warning("조건에 맞는 후보가 없습니다. 필터를 완화해보세요.")
         st.stop()
 
-    session = make_session()
+    # 회사 하나하나마다 반복되는 요청이라, 재시도/타임아웃을 가볍게 해서
+    # 실패하는 소수 회사 때문에 전체가 오래 걸리지 않도록 함
+    session = make_session(total=2, backoff_factor=0.5)
 
     progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
     rows = [row for _, row in candidates.iterrows()]
