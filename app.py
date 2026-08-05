@@ -33,6 +33,12 @@ def make_session(total=8, backoff_factor=1.5):
     """일시적인 연결 끊김에 대비해 재시도 로직이 포함된 세션 생성.
     total/backoff_factor를 낮추면 실패 시 더 빨리 포기하고 넘어갑니다."""
     s = requests.Session()
+    s.headers.update({
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+    })
     retry = Retry(
         total=total,
         backoff_factor=backoff_factor,
@@ -320,7 +326,7 @@ if run_btn:
 
     # 회사 하나하나마다 반복되는 요청이라, 재시도/타임아웃을 가볍게 해서
     # 실패하는 소수 회사 때문에 전체가 오래 걸리지 않도록 함
-    session = make_session(total=4, backoff_factor=0.7)
+    session = make_session(total=6, backoff_factor=1.0)
 
     progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
     rows = [row for _, row in candidates.iterrows()]
