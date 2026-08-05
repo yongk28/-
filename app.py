@@ -135,14 +135,15 @@ def load_kind_listing():
 def load_corp_map(api_key: str):
     """OpenDART corpCode.xml -> {종목코드: corp_code} 매핑 (하루 1회만 다시 받음)"""
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
-    s = make_session()
+    s = make_session(total=5, backoff_factor=1.5)
     try:
-        resp = s.get(url, timeout=30)
+        # 이 파일은 용량이 꽤 커서(수 MB) 접속 타임아웃과 읽기 타임아웃을 넉넉하게 분리해서 줌
+        resp = s.get(url, timeout=(20, 60))
         resp.raise_for_status()
     except requests.exceptions.ConnectionError as e:
         raise RuntimeError(
-            "OpenDART 서버에 연결할 수 없습니다. 네트워크(방화벽/백신/사내망) 문제일 수 있습니다. "
-            "브라우저로 같은 주소가 열리는지 먼저 확인해보세요."
+            f"OpenDART 서버에 연결할 수 없습니다: {e}\n"
+            "네트워크(방화벽/백신/사내망) 문제일 수 있습니다. 잠시 후 다시 시도해보세요."
         ) from e
     zf = zipfile.ZipFile(io.BytesIO(resp.content))
     xml_bytes = zf.read(zf.namelist()[0])
