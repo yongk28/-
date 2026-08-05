@@ -60,7 +60,10 @@ def make_session(total=8, backoff_factor=1.5):
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        )
+        ),
+        # 재사용하던 연결이 서버 쪽에서 이미 끊긴 걸 모르고 재사용하다가
+        # "Connection reset by peer"가 나는 걸 막기 위해, 매번 새 연결을 맺도록 강제
+        "Connection": "close",
     })
     retry = Retry(
         total=total,
@@ -68,7 +71,7 @@ def make_session(total=8, backoff_factor=1.5):
         status_forcelist=[429, 500, 502, 503, 504],
         allowed_methods=["GET"],
     )
-    adapter = HTTPAdapter(max_retries=retry)
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=50, pool_maxsize=50)
     s.mount("https://", adapter)
     s.mount("http://", adapter)
     return s
