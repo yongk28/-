@@ -103,7 +103,13 @@ def simplify_address(addr: str) -> str:
 def load_kind_listing():
     """KRX KIND 상장법인목록 전체 다운로드 (하루 1회만 다시 받음)"""
     kind_url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
-    df = pd.read_html(kind_url, header=0, encoding='euc-kr')[0]
+    # pd.read_html이 URL을 직접 받으면 내부적으로 urllib을 써서 User-Agent가 안 붙다보니
+    # KRX 쪽에서 차단하는 경우가 있어, requests로 먼저 받아온 뒤 그 내용을 파싱한다.
+    s = make_session(total=3, backoff_factor=1.0)
+    resp = s.get(kind_url, timeout=(20, 20))
+    resp.raise_for_status()
+    resp.encoding = 'euc-kr'
+    df = pd.read_html(io.StringIO(resp.text), header=0)[0]
     df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
     df = df.rename(columns={'주요제품': '대표상품_브랜드', '홈페이지': '홈페이지_주소'})
 
