@@ -125,11 +125,11 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year,
               "reprt_code": reprt_code, "fs_div": "CFS"}
     try:
-        r = session.get(url, params=params, timeout=12)
+        r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
         if data.get('status') != '000':
             params['fs_div'] = 'OFS'
-            r = session.get(url, params=params, timeout=12)
+            r = session.get(url, params=params, timeout=(20, 15))
             data = r.json()
         if data.get('status') != '000':
             reason = f"OpenDART 응답: {data.get('status')} - {data.get('message', '')}"
@@ -157,7 +157,7 @@ def get_company_detail(session, api_key, corp_code):
     url = "https://opendart.fss.or.kr/api/company.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code}
     try:
-        r = session.get(url, params=params, timeout=12)
+        r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
         if data.get('status') == '000':
             return data.get('adres', ''), data.get('est_dt', '')
@@ -170,7 +170,7 @@ def get_employee_count(session, api_key, corp_code, bsns_year, reprt_code):
     url = "https://opendart.fss.or.kr/api/empSttus.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code}
     try:
-        r = session.get(url, params=params, timeout=12)
+        r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
         if data.get('status') != '000':
             return None
