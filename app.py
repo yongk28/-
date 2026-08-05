@@ -113,14 +113,18 @@ def load_kind_listing():
     df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
     df = df.rename(columns={'주요제품': '대표상품_브랜드', '홈페이지': '홈페이지_주소'})
 
-    import FinanceDataReader as fdr
+    # 시장구분(코스피/코스닥/코넥스)은 무거운 시세 데이터 라이브러리 대신,
+    # KIND 자체의 시장별 다운로드(marketType 파라미터)로 가볍게 태깅한다.
     market_map = {}
-    for m in ['KOSPI', 'KOSDAQ', 'KONEX']:
+    for market_name, market_type in [('KOSPI', 'stockMkt'), ('KOSDAQ', 'kosdaqMkt'), ('KONEX', 'konexMkt')]:
         try:
-            df_m = fdr.StockListing(m)
-            code_col_m = 'Code' if 'Code' in df_m.columns else '종목코드'
-            for c in df_m[code_col_m].astype(str).str.zfill(6):
-                market_map[c] = m
+            m_url = f"https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&marketType={market_type}"
+            m_resp = s.get(m_url, timeout=(20, 20))
+            m_resp.raise_for_status()
+            m_resp.encoding = 'euc-kr'
+            m_df = pd.read_html(io.StringIO(m_resp.text), header=0)[0]
+            for c in m_df['종목코드'].astype(str).str.zfill(6):
+                market_map[c] = market_name
         except Exception:
             pass
     df['시장구분'] = df['종목코드'].map(market_map).fillna('기타')
