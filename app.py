@@ -126,7 +126,8 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
             r = session.get(url, params=params, timeout=12)
             data = r.json()
         if data.get('status') != '000':
-            return None, None, None
+            reason = f"OpenDART 응답: {data.get('status')} - {data.get('message', '')}"
+            return None, None, None, reason
         revenue = op_profit = net_income = None
         for it in data.get('list', []):
             nm = it.get('account_nm', '')
@@ -141,9 +142,9 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
                 op_profit = amt
             elif nm in ('당기순이익', '당기순이익(손실)') and net_income is None:
                 net_income = amt
-        return revenue, op_profit, net_income
-    except Exception:
-        return None, None, None
+        return revenue, op_profit, net_income, None
+    except Exception as e:
+        return None, None, None, f"연결 오류: {e}"
 
 
 def get_company_detail(session, api_key, corp_code):
@@ -319,7 +320,7 @@ if run_btn:
 
     # 회사 하나하나마다 반복되는 요청이라, 재시도/타임아웃을 가볍게 해서
     # 실패하는 소수 회사 때문에 전체가 오래 걸리지 않도록 함
-    session = make_session(total=2, backoff_factor=0.5)
+    session = make_session(total=4, backoff_factor=0.7)
 
     progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
     rows = [row for _, row in candidates.iterrows()]
@@ -336,7 +337,7 @@ if run_btn:
         done = 0
         for fut in as_completed(future_map):
             row, corp_code = future_map[fut]
-            revenue, op_profit, net_income = fut.result()
+            revenue, op_profit, net_income, reason = fut.result()
             results.append({
                 '종목코드': row['종목코드'], 'corp_code': corp_code, '기업명': row['회사명'], '업종': row['업종'],
                 '대표상품_브랜드': row.get('대표상품_브랜드'), '홈페이지_주소': row.get('홈페이지_주소'),
@@ -344,6 +345,7 @@ if run_btn:
                 '매출액_억': (revenue / 1e8) if revenue is not None else None,
                 '영업이익_억': (op_profit / 1e8) if op_profit is not None else None,
                 '당기순이익_억': (net_income / 1e8) if net_income is not None else None,
+                '실패사유': reason,
             })
             done += 1
             progress.progress(done / len(future_map), text=f"매출/영업이익/순이익 조회 중... ({done}/{len(future_map)})")
@@ -358,10 +360,11 @@ if run_btn:
     if not no_data.empty:
         with st.expander(f"⚠️ 매출 데이터를 못 가져온 회사 {len(no_data)}개 (클릭해서 보기)"):
             st.write(
-                "네트워크 연결 문제이거나, 해당 회사가 이 사업연도에 사업보고서를 안 냈을 수 있습니다. "
-                "재시도하려면 '검색 실행'을 다시 눌러보세요."
+                "'실패사유'가 **'연결 오류'**로 시작하면 네트워크 문제라 재시도하면 될 수 있습니다. "
+                "**'OpenDART 응답'**으로 시작하면 그 회사가 이 조건(사업연도/보고서 종류)으로는 "
+                "실제로 데이터가 없다는 뜻이라, 재시도해도 똑같이 나올 가능성이 높습니다."
             )
-            st.dataframe(no_data[['기업명', '종목코드']], use_container_width=True)
+            st.dataframe(no_data[['기업명', '종목코드', '실패사유']], use_container_width=True)
 
     filtered = df_result.dropna(subset=['매출액_억']).copy()
     filtered = filtered[(filtered['매출액_억'] >= min_rev) & (filtered['매출액_억'] <= max_rev)]
