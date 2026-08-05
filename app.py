@@ -331,6 +331,18 @@ if run_btn:
             )
             st.stop()
 
+    # 서버가 한동안 쉬고 있다가 오랜만에 외부로 나가는 첫 연결이 유독 느린 경우가 있어서,
+    # 본격적으로 회사들을 조회하기 전에 미리 한 번 가볍게 요청을 보내 연결을 깨워둠 (실패해도 무시)
+    try:
+        warmup_session = make_session(total=1, backoff_factor=0.3)
+        warmup_session.get(
+            "https://opendart.fss.or.kr/api/company.json",
+            params={"crtfc_key": api_key, "corp_code": "00126380"},
+            timeout=(30, 20),
+        )
+    except Exception:
+        pass
+
     candidates = kind_df.copy()
     kw_list = [k.strip() for k in industry_keywords.split(',') if k.strip()]
     wl_list = [k.strip() for k in whitelist_names.split(',') if k.strip()]
