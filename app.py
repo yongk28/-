@@ -99,6 +99,64 @@ def simplify_address(addr: str) -> str:
     return sido
 
 
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 7)
+def load_ksic_table():
+    """한국표준산업분류(KSIC) 코드->업종명 매핑표 (공개 데이터, 1주일 캐시)"""
+    url = "https://raw.githubusercontent.com/FinanceData/KSIC/master/KSIC_09.csv.gz"
+    s = make_session(total=3, backoff_factor=1.0)
+    resp = s.get(url, timeout=(20, 30))
+    resp.raise_for_status()
+    df = pd.read_csv(io.BytesIO(resp.content), compression='gzip', dtype='str')
+    return dict(zip(df['Industy_code'], df['Industy_name']))
+
+
+def code_to_industry_name(code, ksic_map):
+    """업종코드를 실제 업종명으로 변환. 정확히 안 맞으면 자릿수를 줄여가며 상위 분류로 시도."""
+    if not code:
+        return ''
+    code = code.strip()
+    for length in (len(code), 5, 4, 3, 2):
+        candidate = code[:length]
+        if candidate in ksic_map:
+            return ksic_map[candidate]
+    return ''
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def load_company_details_bulk(corp_map: dict, api_key: str, max_workers: int = 10):
+    """상장사 전체(약 2,500개)의 기업개황(주소/설립일/정밀업종)을 한 번에 받아서 캐시.
+    이후 검색할 때마다 다시 조회하지 않고 이 캐시를 재사용한다."""
+    ksic_map = load_ksic_table()
+    session = make_session(total=2, backoff_factor=0.5)
+
+    def _fetch(stock_code, corp_code):
+        url = "https://opendart.fss.or.kr/api/company.json"
+        params = {"crtfc_key": api_key, "corp_code": corp_code}
+        try:
+            RATE_LIMITER.wait()
+            r = session.get(url, params=params, timeout=(20, 15))
+            data = r.json()
+            if data.get('status') != '000':
+                return stock_code, '', '', ''
+            return stock_code, data.get('adres', ''), data.get('est_dt', ''), data.get('induty_code', '')
+        except Exception:
+            return stock_code, '', '', ''
+
+    rows = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_fetch, sc, cc) for sc, cc in corp_map.items()]
+        for fut in as_completed(futures):
+            stock_code, adres, est_dt, induty_code = fut.result()
+            rows.append({
+                '종목코드': stock_code,
+                '본사_위치': simplify_address(adres),
+                '설립일': est_dt,
+                '설립연도': get_founding_year(est_dt),
+                '상세업종': code_to_industry_name(induty_code, ksic_map),
+            })
+    return pd.DataFrame(rows)
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
 def load_kind_listing():
     """KRX KIND 상장법인목록 전체 다운로드 (하루 1회만 다시 받음)"""
@@ -231,27 +289,6 @@ def get_company_detail(session, api_key, corp_code):
         return '', ''
 
 
-def get_employee_count(session, api_key, corp_code, bsns_year, reprt_code):
-    url = "https://opendart.fss.or.kr/api/empSttus.json"
-    params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code}
-    try:
-        RATE_LIMITER.wait()
-        r = session.get(url, params=params, timeout=(20, 15))
-        data = r.json()
-        if data.get('status') != '000':
-            return None
-        total, found = 0, False
-        for it in data.get('list', []):
-            for key in ('rgllbr_co', 'cnttk_co'):
-                s = (it.get(key, '') or '').replace(',', '').strip()
-                if s.isdigit():
-                    total += int(s)
-                    found = True
-        return total if found else None
-    except Exception:
-        return None
-
-
 def get_founding_year(est_dt):
     try:
         return int(est_dt[:4])
@@ -326,12 +363,6 @@ with st.sidebar:
     min_ni = c1.number_input("최소", value=-10000000, step=100, key="min_ni")
     max_ni = c2.number_input("최대", value=10000000, step=100, key="max_ni")
 
-    st.markdown("**직원수**")
-    fetch_employees = st.checkbox("직원수 조회하기 (API 호출이 추가로 발생, 네트워크 불안정하면 꺼두세요)", value=False)
-    c1, c2 = st.columns(2)
-    min_emp = c1.number_input("최소", value=0, step=10, key="min_emp", disabled=not fetch_employees)
-    max_emp = c2.number_input("최대", value=10000000, step=10, key="max_emp", disabled=not fetch_employees)
-
     min_founding_year = st.number_input(
         "설립연도 (이 연도 이후에 생긴 기업만, 0이면 필터 없음)", 0, 2100, 0
     )
@@ -380,6 +411,19 @@ if run_btn:
             )
             st.stop()
 
+    with st.spinner(
+        "상장사 전체의 정밀 업종/주소/설립일 정보 로딩 중... "
+        "(최초 1회, 2~3분 정도 걸릴 수 있으며 이후엔 캐시되어 빠릅니다)"
+    ):
+        try:
+            details_df = load_company_details_bulk(corp_map, api_key, max_workers=int(max_workers))
+            kind_df = kind_df.merge(details_df, on='종목코드', how='left')
+        except Exception as e:
+            st.warning(f"정밀 업종/주소 정보를 못 가져왔습니다 (건너뛰고 진행합니다): {e}")
+            kind_df['상세업종'] = ''
+            kind_df['본사_위치'] = ''
+            kind_df['설립연도'] = None
+
     # 서버가 한동안 쉬고 있다가 오랜만에 외부로 나가는 첫 연결이 유독 느린 경우가 있어서,
     # 본격적으로 회사들을 조회하기 전에 미리 한 번 가볍게 요청을 보내 연결을 깨워둠 (실패해도 무시)
     try:
@@ -410,6 +454,9 @@ if run_btn:
             pattern = '|'.join(kw_list)
             mask = mask | candidates['업종'].astype(str).str.contains(pattern, na=False)
             mask = mask | candidates['대표상품_브랜드'].astype(str).str.contains(pattern, na=False)
+            if '상세업종' in candidates.columns:
+                # DART 기업개황 기준 정밀 업종명(예: '화장품 제조업')도 같이 검사
+                mask = mask | candidates['상세업종'].astype(str).str.contains(pattern, na=False)
         candidates = candidates[mask]
 
     if ceo_name_search.strip() and '대표자명' in candidates.columns:
@@ -456,8 +503,10 @@ if run_btn:
             revenue, op_profit, net_income, reason = fut.result()
             results.append({
                 '종목코드': row['종목코드'], 'corp_code': corp_code, '기업명': row['회사명'], '업종': row['업종'],
+                '상세업종': row.get('상세업종'),
                 '대표상품_브랜드': row.get('대표상품_브랜드'), '홈페이지_주소': row.get('홈페이지_주소'),
                 '시장구분': row.get('시장구분'), '대표자명': row.get('대표자명'), '결산월': row.get('결산월'),
+                '본사_위치': row.get('본사_위치'), '설립연도': row.get('설립연도'),
                 '매출액_억': (revenue / 1e8) if revenue is not None else None,
                 '영업이익_억': (op_profit / 1e8) if op_profit is not None else None,
                 '당기순이익_억': (net_income / 1e8) if net_income is not None else None,
@@ -500,49 +549,7 @@ if run_btn:
         st.session_state["still_running"] = False
         st.stop()
 
-    progress2 = st.progress(0.0, text="주소/설립일 조회 중...")
-    corp_codes = filtered['corp_code'].tolist()
-    details = [None] * len(corp_codes)
-    employees = [None] * len(corp_codes)
-
-    executor2 = ThreadPoolExecutor(max_workers=int(max_workers))
-    try:
-        future_map = {executor2.submit(get_company_detail, session, api_key, cc): i for i, cc in enumerate(corp_codes)}
-        done = 0
-        for fut in as_completed(future_map):
-            idx = future_map[fut]
-            details[idx] = fut.result()
-            done += 1
-            progress2.progress(done / len(corp_codes), text=f"주소/설립일 조회 중... ({done}/{len(corp_codes)})")
-    finally:
-        executor2.shutdown(wait=False, cancel_futures=True)
-    progress2.empty()
-
-    if fetch_employees:
-        progress3 = st.progress(0.0, text="직원수 조회 중...")
-        executor3 = ThreadPoolExecutor(max_workers=int(max_workers))
-        try:
-            future_map = {executor3.submit(get_employee_count, session, api_key, cc, bsns_year, "11011"): i
-                          for i, cc in enumerate(corp_codes)}
-            done = 0
-            for fut in as_completed(future_map):
-                idx = future_map[fut]
-                employees[idx] = fut.result()
-                done += 1
-                progress3.progress(done / len(corp_codes), text=f"직원수 조회 중... ({done}/{len(corp_codes)})")
-        finally:
-            executor3.shutdown(wait=False, cancel_futures=True)
-        progress3.empty()
-    else:
-        st.caption("직원수 조회를 건너뛰었습니다 (체크박스 꺼짐). 직원수 칸은 비어있게 나옵니다.")
-
-    filtered['본사_위치'] = [simplify_address(d[0]) for d in details]
-    filtered['설립일'] = [d[1] for d in details]
-    filtered['직원수'] = pd.to_numeric(pd.Series(employees), errors='coerce')
-    filtered['설립연도'] = filtered['설립일'].apply(get_founding_year)
-
     final = filtered.copy()
-    final = final[final['직원수'].isna() | ((final['직원수'] >= min_emp) & (final['직원수'] <= max_emp))]
     if min_founding_year and min_founding_year > 0:
         final = final[final['설립연도'].isna() | (final['설립연도'] >= min_founding_year)]
 
@@ -555,13 +562,15 @@ if run_btn:
 
     output_df = final.rename(columns={
         '대표상품_브랜드': '대표상품 or 브랜드', '매출액_억': '매출액(억원)', '영업이익_억': '영업이익(억원)',
-        '당기순이익_억': '당기순이익(억원)', '홈페이지_주소': '홈페이지 주소', '본사_위치': '본사 위치'
+        '당기순이익_억': '당기순이익(억원)', '홈페이지_주소': '홈페이지 주소', '본사_위치': '본사 위치',
+        '상세업종': '정밀업종(DART기준)'
     })
     output_df['관련기사'] = output_df['기업명'].apply(
         lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(str(name))}"
     )
-    output_df = output_df[['기업명', '관련기사', '업종', '대표상품 or 브랜드', '시장구분', '매출액(억원)', '영업이익(억원)',
-                            '당기순이익(억원)', '직원수', '설립연도', '홈페이지 주소', '본사 위치']]
+    output_df = output_df[['기업명', '관련기사', '업종', '정밀업종(DART기준)', '대표상품 or 브랜드', '시장구분',
+                            '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '설립연도',
+                            '홈페이지 주소', '본사 위치']]
 
     st.success(f"최종 {len(output_df)}개사")
 
@@ -580,8 +589,6 @@ if run_btn:
     display_df = output_df.copy()
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
-    if '직원수' in display_df.columns:
-        display_df['직원수'] = display_df['직원수'].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
     st.dataframe(
         display_df,
