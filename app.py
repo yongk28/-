@@ -14,6 +14,7 @@ OpenDART + KRX 기업 스크리너 - Streamlit 단일 페이지 앱
 import io
 import re
 import time
+import threading
 import zipfile
 import datetime
 import xml.etree.ElementTree as ET
@@ -27,6 +28,28 @@ from urllib3.util.retry import Retry
 import streamlit as st
 
 st.set_page_config(page_title="기업 스크리너", layout="wide")
+
+
+class RateLimiter:
+    """OpenDART가 초당 요청 수를 제한할 가능성에 대비해, 전체 스레드가 공유하는
+    최소 호출 간격을 강제하는 간단한 속도 제한기."""
+
+    def __init__(self, min_interval_sec: float):
+        self.min_interval = min_interval_sec
+        self.lock = threading.Lock()
+        self.last_call = 0.0
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            elapsed = now - self.last_call
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self.last_call = time.monotonic()
+
+
+# 초당 최대 약 15건으로 제한 (OpenDART 쪽 속도 제한에 덜 걸리도록)
+RATE_LIMITER = RateLimiter(min_interval_sec=1 / 15)
 
 
 def make_session(total=8, backoff_factor=1.5):
@@ -125,10 +148,12 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year,
               "reprt_code": reprt_code, "fs_div": "CFS"}
     try:
+        RATE_LIMITER.wait()
         r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
         if data.get('status') != '000':
             params['fs_div'] = 'OFS'
+            RATE_LIMITER.wait()
             r = session.get(url, params=params, timeout=(20, 15))
             data = r.json()
         if data.get('status') != '000':
@@ -167,6 +192,7 @@ def get_company_detail(session, api_key, corp_code):
     url = "https://opendart.fss.or.kr/api/company.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code}
     try:
+        RATE_LIMITER.wait()
         r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
         if data.get('status') == '000':
@@ -180,6 +206,7 @@ def get_employee_count(session, api_key, corp_code, bsns_year, reprt_code):
     url = "https://opendart.fss.or.kr/api/empSttus.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code}
     try:
+        RATE_LIMITER.wait()
         r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
         if data.get('status') != '000':
@@ -279,7 +306,7 @@ with st.sidebar:
 
     bsns_year = st.text_input("조회 사업연도", "2025")
     top_n = st.number_input("최대 결과 개수", 1, 500, 100)
-    max_workers = st.number_input("동시 요청 수", 1, 30, 5)
+    max_workers = st.number_input("동시 요청 수", 1, 30, 10)
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
@@ -344,7 +371,7 @@ if run_btn:
 
     # 회사 하나하나마다 반복되는 요청이라, 재시도/타임아웃을 가볍게 해서
     # 실패하는 소수 회사 때문에 전체가 오래 걸리지 않도록 함
-    session = make_session(total=6, backoff_factor=1.0)
+    session = make_session(total=2, backoff_factor=0.5)
 
     progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
     rows = [row for _, row in candidates.iterrows()]
