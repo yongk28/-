@@ -351,6 +351,15 @@ if run_btn:
         st.warning("매출 데이터를 확보한 회사가 없습니다.")
         st.stop()
 
+    no_data = df_result[df_result['매출액_억'].isna()]
+    if not no_data.empty:
+        with st.expander(f"⚠️ 매출 데이터를 못 가져온 회사 {len(no_data)}개 (클릭해서 보기)"):
+            st.write(
+                "네트워크 연결 문제이거나, 해당 회사가 이 사업연도에 사업보고서를 안 냈을 수 있습니다. "
+                "재시도하려면 '검색 실행'을 다시 눌러보세요."
+            )
+            st.dataframe(no_data[['기업명', '종목코드']], use_container_width=True)
+
     filtered = df_result.dropna(subset=['매출액_억']).copy()
     filtered = filtered[(filtered['매출액_억'] >= min_rev) & (filtered['매출액_억'] <= max_rev)]
     filtered = filtered[filtered['영업이익_억'].isna() | ((filtered['영업이익_억'] >= min_op) & (filtered['영업이익_억'] <= max_op))]
@@ -395,7 +404,7 @@ if run_btn:
 
     filtered['본사_위치'] = [simplify_address(d[0]) for d in details]
     filtered['설립일'] = [d[1] for d in details]
-    filtered['직원수'] = employees
+    filtered['직원수'] = pd.to_numeric(pd.Series(employees), errors='coerce')
     filtered['설립연도'] = filtered['설립일'].apply(get_founding_year)
 
     final = filtered.copy()
@@ -408,7 +417,7 @@ if run_btn:
 
     final = final.sort_values('매출액_억', ascending=False).head(int(top_n)).reset_index(drop=True)
     for col in ['매출액_억', '영업이익_억', '당기순이익_억']:
-        final[col] = final[col].round(0).astype('Int64')
+        final[col] = pd.to_numeric(final[col], errors='coerce').round(0).astype('Int64')
 
     output_df = final.rename(columns={
         '대표상품_브랜드': '대표상품 or 브랜드', '매출액_억': '매출액(억원)', '영업이익_억': '영업이익(억원)',
