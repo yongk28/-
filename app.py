@@ -249,10 +249,14 @@ with st.sidebar:
     st.header("🔑 API 키")
     api_key = st.text_input("OpenDART API 키", type="password", help="opendart.fss.or.kr 에서 발급받은 키")
 
-    if st.button("🛑 앱 완전히 종료", use_container_width=True):
-        st.warning("앱을 종료합니다. 이 브라우저 탭은 이제 닫으셔도 됩니다.")
-        import os
-        os._exit(0)
+    # Streamlit Community Cloud에 배포된 경우(/mount/src 경로 사용) 이 프로세스를 강제로 죽이면
+    # 플랫폼이 앱 크래시로 인식해서 에러가 나므로, 로컬 실행일 때만 종료 버튼을 보여줌
+    import os
+    _is_cloud = os.path.abspath(__file__).startswith("/mount/src")
+    if not _is_cloud:
+        if st.button("🛑 앱 완전히 종료 (로컬 실행 전용)", use_container_width=True):
+            st.warning("앱을 종료합니다. 이 브라우저 탭은 이제 닫으셔도 됩니다.")
+            os._exit(0)
 
     st.markdown("---")
     st.header("🔎 필터 조건")
