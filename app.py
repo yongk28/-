@@ -135,17 +135,35 @@ def load_kind_listing():
 def load_corp_map(api_key: str):
     """OpenDART corpCode.xml -> {종목코드: corp_code} 매핑 (하루 1회만 다시 받음)"""
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
-    s = make_session(total=5, backoff_factor=1.5)
-    try:
-        # 이 파일은 용량이 꽤 커서(수 MB) 접속 타임아웃과 읽기 타임아웃을 넉넉하게 분리해서 줌
-        resp = s.get(url, timeout=(20, 60))
-        resp.raise_for_status()
-    except requests.exceptions.ConnectionError as e:
+    s = make_session(total=3, backoff_factor=1.5)
+    # 이 파일은 용량이 커서 한 번에 왕창 받다가 끊기는 경우가 있어,
+    # 스트리밍으로 조금씩 나눠 받도록 하고, 압축 응답 대신 원본을 요청함
+    headers = {"Accept-Encoding": "identity"}
+
+    last_err = None
+    content = None
+    for attempt in range(3):
+        try:
+            with s.get(url, timeout=(20, 60), stream=True, headers=headers) as resp:
+                resp.raise_for_status()
+                chunks = []
+                for chunk in resp.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        chunks.append(chunk)
+                content = b"".join(chunks)
+            break
+        except requests.exceptions.ConnectionError as e:
+            last_err = e
+            time.sleep(1.5 * (attempt + 1))
+            continue
+
+    if content is None:
         raise RuntimeError(
-            f"OpenDART 서버에 연결할 수 없습니다: {e}\n"
+            f"OpenDART 서버에 연결할 수 없습니다: {last_err}\n"
             "네트워크(방화벽/백신/사내망) 문제일 수 있습니다. 잠시 후 다시 시도해보세요."
-        ) from e
-    zf = zipfile.ZipFile(io.BytesIO(resp.content))
+        )
+
+    zf = zipfile.ZipFile(io.BytesIO(content))
     xml_bytes = zf.read(zf.namelist()[0])
     root = ET.fromstring(xml_bytes)
     corp_map = {}
