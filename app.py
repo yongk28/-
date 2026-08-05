@@ -147,18 +147,15 @@ def load_corp_map(api_key: str):
 
 
 def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
-    url = "https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json"
-    params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year,
-              "reprt_code": reprt_code, "fs_div": "CFS"}
+    # fnlttSinglAcntAll(전체 재무제표)는 계열사가 많은 대기업일수록 응답이 매우 커져서
+    # 연결이 끊기는 문제가 있었음. 필요한 3개 계정만 표준화해서 돌려주는
+    # fnlttSinglAcnt(주요계정) API로 교체 - 훨씬 가볍고 안정적임.
+    url = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
+    params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code}
     try:
         RATE_LIMITER.wait()
         r = session.get(url, params=params, timeout=(20, 15))
         data = r.json()
-        if data.get('status') != '000':
-            params['fs_div'] = 'OFS'
-            RATE_LIMITER.wait()
-            r = session.get(url, params=params, timeout=(20, 15))
-            data = r.json()
         if data.get('status') != '000':
             reason = f"OpenDART 응답: {data.get('status')} - {data.get('message', '')}"
             return None, None, None, reason
