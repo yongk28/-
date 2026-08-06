@@ -740,7 +740,7 @@ if "last_output_df" in st.session_state:
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
-    event = st.dataframe(
+    st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True,
@@ -749,23 +749,21 @@ if "last_output_df" in st.session_state:
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
         },
-        on_select="rerun",
-        selection_mode="single-row",
-        key="results_table",
     )
 
-    st.caption(f"🔧 디버그: event.selection = {dict(event.selection) if event.selection else event.selection}")
-    selected_rows = event.selection.rows
-    if selected_rows:
-        selected_industry = output_df.iloc[selected_rows[0]]['업종']
-        st.info(f"선택한 행의 업종: **{selected_industry}**")
-        if st.button(f"🔎 '{selected_industry}' 업종으로 다시 검색"):
-            st.session_state["industry_keywords_input"] = selected_industry
+    st.markdown("**🔎 특정 회사의 업종으로 재검색하기**")
+    pick_col1, pick_col2 = st.columns([3, 1])
+    picked_company = pick_col1.selectbox(
+        "회사 선택", options=output_df['회사명'].tolist(),
+        label_visibility="collapsed",
+    )
+    if picked_company:
+        picked_industry = output_df.loc[output_df['회사명'] == picked_company, '업종'].iloc[0]
+        if pick_col2.button(f"'{picked_industry}'로 재검색", use_container_width=True):
+            st.session_state["industry_keywords_input"] = picked_industry
             st.session_state["enter_pressed_search"] = True
             del st.session_state["last_output_df"]
             st.rerun()
-    else:
-        st.caption("💡 결과표에서 행을 클릭해서 선택하면, 그 회사의 업종으로 재검색할 수 있는 버튼이 여기 나타납니다.")
 
     buf = io.BytesIO()
     output_df.to_excel(buf, index=False)
