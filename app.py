@@ -479,9 +479,31 @@ if "pending_industry_search" in st.session_state:
     st.session_state["industry_keywords_input"] = ""
     st.session_state["enter_pressed_search"] = True
 
+FILTER_KEYS = [
+    "daebunryu_select_input", "jungbunryu_select_input", "sobunryu_select_input",
+    "industry_select_input", "industry_keywords_input", "company_name_search_input",
+    "ceo_name_search_input", "corp_type_filter_input", "region_filter_input",
+]
+FILTER_DEFAULTS = {
+    "min_founding_year_input": 0,
+    "top_n_input": 200,
+}
+
+if st.session_state.get("pending_reset_filters", False):
+    for k in FILTER_KEYS:
+        st.session_state.pop(k, None)
+    for k, v in FILTER_DEFAULTS.items():
+        st.session_state[k] = v
+    st.session_state.pop("pending_reset_filters", None)
+
 with st.sidebar:
     st.header("🔎 필터 조건")
     st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
+
+    if st.button("🔄 필터 초기화", use_container_width=True):
+        st.session_state["pending_reset_filters"] = True
+        st.session_state.pop("last_output_df", None)
+        st.rerun()
 
     daebunryu_select = st.multiselect(
         "1단계: 업종 대분류", options=daebunryu_options, default=[],
@@ -512,22 +534,29 @@ with st.sidebar:
         key="industry_select_input",
     )
     industry_keywords = st.text_input(
-        "업종 키워드 검색 (콤마로 구분, 계단식과 별개로 전체에서 검색)", "",
+        "업종 키워드 검색 (콤마로 구분, Enter로 바로 검색, 계단식과 별개로 전체에서 검색)", "",
         key="industry_keywords_input",
+        on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
     company_name_search = st.text_input(
-        "회사명 검색 (Enter로 바로 검색)", "",
+        "회사명 검색 (콤마로 여러 개 가능, Enter로 바로 검색)", "",
         key="company_name_search_input",
         on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
-    ceo_name_search = st.text_input("대표자명 검색", "")
+    ceo_name_search = st.text_input(
+        "대표자명 검색 (Enter로 바로 검색)", "", key="ceo_name_search_input",
+        on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
+    )
     corp_type_filter = st.multiselect(
         "법인구분", options=corp_type_options, default=[],
         help="유가증권시장/코스닥시장/코넥스시장 = 상장사, 기타법인 = 비상장(외감대상)",
+        key="corp_type_filter_input",
     )
-    region_filter = st.text_input("본사 지역 (예: 서울)", "")
-    min_founding_year = st.number_input("설립연도 (이후 설립된 기업만, 0=필터 없음)", 0, 2100, 0)
-    top_n = st.number_input("최대 결과 개수", 1, 2000, 200)
+    region_filter = st.text_input("본사 지역 (예: 서울)", "", key="region_filter_input")
+    min_founding_year = st.number_input(
+        "설립연도 (이후 설립된 기업만, 0=필터 없음)", 0, 2100, 0, key="min_founding_year_input"
+    )
+    top_n = st.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
     st.markdown("---")
     st.header("💰 매출 조회 (선택, 상장사만 가능)")
@@ -588,9 +617,11 @@ if run_btn:
 
     candidates = registry_df.copy()
     kw_list = [k.strip() for k in industry_keywords.split(',') if k.strip()]
+    name_list = [n.strip() for n in company_name_search.split(',') if n.strip()]
 
-    if company_name_search.strip():
-        candidates = candidates[candidates['회사명'].str.contains(company_name_search.strip(), na=False)]
+    if name_list:
+        pattern = '|'.join(re.escape(n) for n in name_list)
+        candidates = candidates[candidates['회사명'].str.contains(pattern, na=False)]
     else:
         if daebunryu_select:
             candidates = candidates[candidates['대분류'].isin(daebunryu_select)]
