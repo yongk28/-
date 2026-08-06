@@ -455,6 +455,11 @@ _order = [nm for nm, _, _ in DAEBUNRYU_RANGES] + ['미분류']
 _present = set(v['대분류'] for v in hierarchy_map.values())
 daebunryu_options = [x for x in _order if x in _present]
 
+# 결과표 아래 "재검색" 버튼에서 넘어온 값이 있으면, 위젯이 그려지기 전에 미리 반영
+if "pending_industry_search" in st.session_state:
+    st.session_state["industry_keywords_input"] = st.session_state.pop("pending_industry_search")
+    st.session_state["enter_pressed_search"] = True
+
 with st.sidebar:
     st.header("🔎 필터 조건")
     st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
@@ -740,30 +745,34 @@ if "last_output_df" in st.session_state:
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
-    st.dataframe(
-        display_df,
+    editor_df = display_df.copy()
+    editor_df.insert(0, '선택', False)
+
+    edited_df = st.data_editor(
+        editor_df,
         use_container_width=True,
         hide_index=True,
+        disabled=[c for c in editor_df.columns if c != '선택'],
         column_config={
+            "선택": st.column_config.CheckboxColumn("선택"),
             "홈페이지 주소": st.column_config.LinkColumn("홈페이지 주소", display_text="바로가기"),
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
         },
+        key="results_editor",
     )
 
-    st.markdown("**🔎 특정 회사의 업종으로 재검색하기**")
-    pick_col1, pick_col2 = st.columns([3, 1])
-    picked_company = pick_col1.selectbox(
-        "회사 선택", options=output_df['회사명'].tolist(),
-        label_visibility="collapsed",
-    )
-    if picked_company:
-        picked_industry = output_df.loc[output_df['회사명'] == picked_company, '업종'].iloc[0]
-        if pick_col2.button(f"'{picked_industry}'로 재검색", use_container_width=True):
-            st.session_state["industry_keywords_input"] = picked_industry
-            st.session_state["enter_pressed_search"] = True
+    checked = edited_df[edited_df['선택']]
+    st.markdown("**🔎 체크한 회사(들)의 업종으로 재검색하기**")
+    if not checked.empty:
+        picked_industries = sorted(output_df.loc[checked.index, '업종'].unique().tolist())
+        st.caption(f"체크한 {len(checked)}개사의 업종: " + ", ".join(picked_industries))
+        if st.button(f"이 업종({len(picked_industries)}개)으로 재검색"):
+            st.session_state["pending_industry_search"] = ", ".join(picked_industries)
             del st.session_state["last_output_df"]
             st.rerun()
+    else:
+        st.caption("표 왼쪽 '선택' 칸에 체크하면, 그 회사(들)의 업종으로 재검색할 수 있습니다.")
 
     buf = io.BytesIO()
     output_df.to_excel(buf, index=False)
