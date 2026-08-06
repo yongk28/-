@@ -413,7 +413,10 @@ with st.sidebar:
         "4단계: 업종 선택 (DART 정밀 업종명)",
         options=sorted(_pool), default=[],
     )
-    industry_keywords = st.text_input("업종 키워드 검색 (콤마로 구분, 계단식과 별개로 전체에서 검색)", "")
+    industry_keywords = st.text_input(
+        "업종 키워드 검색 (콤마로 구분, 계단식과 별개로 전체에서 검색)", "",
+        key="industry_keywords_input",
+    )
     company_name_search = st.text_input(
         "회사명 검색 (Enter로 바로 검색)", "",
         key="company_name_search_input",
@@ -610,9 +613,9 @@ if run_btn:
 
     output_df['대분류'] = final['대분류']
 
-    output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '대분류', '업종', '법인구분', '대표자명',
-                            '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
-                            '설립연도', '홈페이지 주소', '본사 위치']]
+    output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종', '법인구분',
+                            '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
+                            '설립연도', '본사 위치']]
 
     if fetch_titles:
         if not kakao_rest_key:
@@ -660,7 +663,7 @@ if run_btn:
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
-    st.dataframe(
+    event = st.dataframe(
         display_df,
         use_container_width=True,
         column_config={
@@ -668,7 +671,18 @@ if run_btn:
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
         },
+        on_select="rerun",
+        selection_mode="single-row",
     )
+
+    selected_rows = event.selection.get("rows", []) if event and hasattr(event, "selection") else []
+    if selected_rows:
+        selected_industry = output_df.iloc[selected_rows[0]]['업종']
+        st.info(f"선택한 행의 업종: **{selected_industry}**")
+        if st.button(f"🔎 '{selected_industry}' 업종으로 다시 검색"):
+            st.session_state["industry_keywords_input"] = selected_industry
+            st.session_state["enter_pressed_search"] = True
+            st.rerun()
 
     buf = io.BytesIO()
     output_df.to_excel(buf, index=False)
