@@ -717,6 +717,13 @@ if run_btn:
             output_df['최근 소식 제목(참고용)'] = title_results
             output_df['뉴스여론(최근6개월, 참고용)'] = sentiment_results
 
+    # 결과를 세션에 저장해둬야, 결과표에서 행을 선택해서 다시 그려질 때도(run_btn=False인 순간에도)
+    # 아래 표시 블록이 이 결과를 계속 보여줄 수 있음
+    st.session_state["last_output_df"] = output_df
+
+if "last_output_df" in st.session_state:
+    output_df = st.session_state["last_output_df"]
+
     st.success(f"최종 {len(output_df)}개사")
 
     def normalize_url(u):
@@ -754,6 +761,7 @@ if run_btn:
         if st.button(f"🔎 '{selected_industry}' 업종으로 다시 검색"):
             st.session_state["industry_keywords_input"] = selected_industry
             st.session_state["enter_pressed_search"] = True
+            del st.session_state["last_output_df"]
             st.rerun()
     else:
         st.caption("💡 결과표에서 행을 클릭해서 선택하면, 그 회사의 업종으로 재검색할 수 있는 버튼이 여기 나타납니다.")
@@ -766,5 +774,5 @@ if run_btn:
         file_name="screener_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-else:
+elif not run_btn:
     st.info("왼쪽에서 조건을 입력하고 '검색 실행' 버튼을 누르세요.")
