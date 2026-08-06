@@ -568,7 +568,15 @@ with st.sidebar:
     min_rev = max_rev = min_op = max_op = min_ni = max_ni = None
     max_workers = 10
     if fetch_revenue:
-        api_key = st.text_input("OpenDART API 키", type="password")
+        try:
+            _secret_key = st.secrets.get("OPENDART_API_KEY", "")
+        except Exception:
+            _secret_key = ""
+        if _secret_key:
+            api_key = _secret_key
+            st.caption("✅ 저장된 API 키를 사용합니다 (Secrets에 등록됨)")
+        else:
+            api_key = st.text_input("OpenDART API 키", type="password")
         bsns_year = st.text_input("조회 사업연도", "2025")
         st.markdown("**매출액(억원)**")
         c1, c2 = st.columns(2)
