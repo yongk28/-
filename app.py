@@ -405,7 +405,14 @@ if run_btn:
     output_df['관련기사'] = output_df['회사명'].apply(
         lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(str(name))}"
     )
-    output_df = output_df[['회사명', '관련기사', '업종', '법인구분', '대표자명',
+
+    def bizno_url(brno):
+        digits = re.sub(r'\D', '', str(brno)) if pd.notna(brno) else ''
+        return f"https://bizno.net/article/{digits}" if len(digits) == 10 else None
+
+    output_df['기업정보(bizno)'] = final['사업자등록번호'].apply(bizno_url)
+
+    output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '업종', '법인구분', '대표자명',
                             '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
                             '설립연도', '홈페이지 주소', '본사 위치']]
 
@@ -431,6 +438,7 @@ if run_btn:
         column_config={
             "홈페이지 주소": st.column_config.LinkColumn("홈페이지 주소", display_text="바로가기"),
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
+            "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
         },
     )
 
