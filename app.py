@@ -166,6 +166,55 @@ def load_corp_map(api_key: str):
     return corp_map
 
 
+POSITIVE_WORDS = [
+    '급등', '호실적', '흑자', '수주', '성장', '역대', '최대', '호평', '선정', '1위',
+    '개선', '반등', '상승', '투자유치', '신기록', '돌파', '확대', '진출', '체결', '수출',
+]
+NEGATIVE_WORDS = [
+    '급락', '적자', '부진', '소송', '리콜', '논란', '제재', '하락', '악재', '위기',
+    '감소', '철수', '중단', '파산', '구조조정', '횡령', '배임', '과징금', '불매', '피소',
+]
+
+
+def get_news_sentiment(session, client_id, client_secret, company_name, display=30):
+    """네이버 뉴스검색 API로 최근 기사 제목을 가져와 긍정/부정 단어 빈도를 세는 단순 방식.
+    정교한 감성분석이 아니라 참고용 신호일 뿐임."""
+    url = "https://openapi.naver.com/v1/search/news.json"
+    headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
+    params = {"query": company_name, "display": display, "sort": "date"}
+    try:
+        RATE_LIMITER.wait()
+        r = session.get(url, headers=headers, params=params, timeout=(15, 15))
+        data = r.json()
+        if 'errorCode' in data:
+            return f"네이버 API 오류: {data.get('errorMessage', data.get('errorCode'))}"
+        items = data.get('items', [])
+        if not items:
+            return '기사 없음'
+        pos = neg = 0
+        for it in items:
+            title = re.sub('<[^<]+?>', '', it.get('title', ''))
+            for w in POSITIVE_WORDS:
+                if w in title:
+                    pos += 1
+            for w in NEGATIVE_WORDS:
+                if w in title:
+                    neg += 1
+        score = pos - neg
+        if score >= 3:
+            return '매우 긍정'
+        elif score >= 1:
+            return '긍정'
+        elif score == 0:
+            return '보통'
+        elif score >= -2:
+            return '부정'
+        else:
+            return '매우 부정'
+    except Exception as e:
+        return f"연결 오류: {e}"
+
+
 def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
     """fnlttSinglAcnt(주요계정) API - 매출액/영업이익/당기순이익만 가볍게 조회"""
     url = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
@@ -274,6 +323,17 @@ with st.sidebar:
         min_ni = c1.number_input("최소", value=-10000000, step=100, key="min_ni")
         max_ni = c2.number_input("최대", value=10000000, step=100, key="max_ni")
         max_workers = st.number_input("동시 요청 수", 1, 30, 10)
+
+    st.markdown("---")
+    st.header("📰 뉴스 여론 (선택, 참고용)")
+    st.caption("기사 제목에 긍정/부정 단어가 얼마나 나오는지 세는 단순 방식입니다. 정확한 분석이 아니라 참고용입니다.")
+    fetch_sentiment = st.checkbox("최근 뉴스 여론 확인하기 (네이버 검색 API 키 필요)", value=False)
+    naver_client_id = ""
+    naver_client_secret = ""
+    if fetch_sentiment:
+        naver_client_id = st.text_input("네이버 API Client ID")
+        naver_client_secret = st.text_input("네이버 API Client Secret", type="password")
+        st.caption("developers.naver.com 에서 무료로 발급받을 수 있습니다 (하루 25,000건).")
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
@@ -415,6 +475,33 @@ if run_btn:
     output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '업종', '법인구분', '대표자명',
                             '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
                             '설립연도', '홈페이지 주소', '본사 위치']]
+
+    if fetch_sentiment:
+        if not naver_client_id or not naver_client_secret:
+            st.warning("뉴스 여론을 켜셨다면 네이버 API Client ID/Secret을 입력해주세요. (이 항목은 건너뜁니다)")
+        else:
+            news_session = make_session(total=2, backoff_factor=0.5)
+            progress4 = st.progress(0.0, text="뉴스 여론 조회 중...")
+            names = output_df['회사명'].tolist()
+            sentiment_results = [None] * len(names)
+            executor4 = ThreadPoolExecutor(max_workers=10)
+            try:
+                future_map = {
+                    executor4.submit(get_news_sentiment, news_session, naver_client_id,
+                                      naver_client_secret, nm): i
+                    for i, nm in enumerate(names)
+                }
+                done = 0
+                for fut in as_completed(future_map):
+                    idx = future_map[fut]
+                    sentiment_results[idx] = fut.result()
+                    done += 1
+                    progress4.progress(done / len(names), text=f"뉴스 여론 조회 중... ({done}/{len(names)})")
+            finally:
+                executor4.shutdown(wait=False, cancel_futures=True)
+            progress4.empty()
+
+            output_df['뉴스여론(참고용)'] = sentiment_results
 
     st.success(f"최종 {len(output_df)}개사")
 
