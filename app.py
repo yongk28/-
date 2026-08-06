@@ -202,7 +202,8 @@ def load_dart_full_registry():
         pass
 
     content = _download_bytes(
-        session, "https://dart.fss.or.kr/dsae001/downloadExcel.do", timeout=(20, 90)
+        session, "https://dart.fss.or.kr/dsae001/downloadExcel.do", timeout=(20, 90),
+        attempts=2, max_total_seconds=90,
     )
     df = pd.read_excel(io.BytesIO(content))
 
@@ -735,6 +736,7 @@ if run_btn:
     event = st.dataframe(
         display_df,
         use_container_width=True,
+        hide_index=True,
         column_config={
             "홈페이지 주소": st.column_config.LinkColumn("홈페이지 주소", display_text="바로가기"),
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
@@ -742,9 +744,10 @@ if run_btn:
         },
         on_select="rerun",
         selection_mode="single-row",
+        key="results_table",
     )
 
-    selected_rows = event.selection.get("rows", []) if event and hasattr(event, "selection") else []
+    selected_rows = event.selection.rows
     if selected_rows:
         selected_industry = output_df.iloc[selected_rows[0]]['업종']
         st.info(f"선택한 행의 업종: **{selected_industry}**")
@@ -752,6 +755,8 @@ if run_btn:
             st.session_state["industry_keywords_input"] = selected_industry
             st.session_state["enter_pressed_search"] = True
             st.rerun()
+    else:
+        st.caption("💡 결과표에서 행을 클릭해서 선택하면, 그 회사의 업종으로 재검색할 수 있는 버튼이 여기 나타납니다.")
 
     buf = io.BytesIO()
     output_df.to_excel(buf, index=False)
