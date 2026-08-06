@@ -479,22 +479,24 @@ if "pending_industry_search" in st.session_state:
     st.session_state["industry_keywords_input"] = ""
     st.session_state["enter_pressed_search"] = True
 
-FILTER_KEYS = [
-    "daebunryu_select_input", "jungbunryu_select_input", "sobunryu_select_input",
-    "industry_select_input", "industry_keywords_input", "company_name_search_input",
-    "ceo_name_search_input", "corp_type_filter_input", "region_filter_input",
-]
 FILTER_DEFAULTS = {
+    "daebunryu_select_input": [],
+    "jungbunryu_select_input": [],
+    "sobunryu_select_input": [],
+    "industry_select_input": [],
+    "industry_keywords_input": "",
+    "company_name_search_input": "",
+    "ceo_name_search_input": "",
+    "corp_type_filter_input": [],
+    "region_filter_input": "",
     "min_founding_year_input": 0,
     "top_n_input": 200,
 }
 
 if st.session_state.get("pending_reset_filters", False):
-    for k in FILTER_KEYS:
-        st.session_state.pop(k, None)
     for k, v in FILTER_DEFAULTS.items():
         st.session_state[k] = v
-    st.session_state.pop("pending_reset_filters", None)
+    st.session_state["pending_reset_filters"] = False
 
 with st.sidebar:
     st.header("🔎 필터 조건")
