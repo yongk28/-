@@ -112,6 +112,67 @@ def _download_bytes(session, url, timeout=(20, 60), attempts=3):
     raise RuntimeError(f"다운로드 실패: {last_err}")
 
 
+DAEBUNRYU_RANGES = [
+    ('농업, 임업 및 어업', 1, 3),
+    ('광업', 5, 8),
+    ('제조업', 10, 34),
+    ('전기, 가스, 증기 및 공기 조절 공급업', 35, 35),
+    ('수도, 하수 및 폐기물 처리, 원료 재생업', 36, 39),
+    ('건설업', 41, 42),
+    ('도매 및 소매업', 45, 47),
+    ('운수 및 창고업', 49, 52),
+    ('숙박 및 음식점업', 55, 56),
+    ('정보통신업', 58, 63),
+    ('금융 및 보험업', 64, 66),
+    ('부동산업', 68, 68),
+    ('전문, 과학 및 기술 서비스업', 69, 73),
+    ('사업시설 관리, 사업 지원 및 임대 서비스업', 74, 76),
+    ('공공 행정, 국방 및 사회보장 행정', 84, 84),
+    ('교육 서비스업', 85, 85),
+    ('보건업 및 사회복지 서비스업', 86, 87),
+    ('예술, 스포츠 및 여가관련 서비스업', 90, 91),
+    ('협회 및 단체, 수리 및 기타 개인 서비스업', 94, 96),
+    ('가구 내 고용활동 및 달리 분류되지 않은 자가소비 생산활동', 97, 98),
+    ('국제 및 외국기관', 99, 99),
+]
+
+
+def _code_to_daebunryu(code2):
+    try:
+        n = int(code2)
+    except Exception:
+        return '미분류'
+    for name, s, e in DAEBUNRYU_RANGES:
+        if s <= n <= e:
+            return name
+    return '미분류'
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 7)
+def load_daebunryu_map(industry_names):
+    """업종명(정밀) -> 대분류 매핑. KSIC 코드표를 받아 역매핑한 뒤 대분류 범위로 그룹핑.
+    표기가 살짝 달라 매칭 안 되는 업종명은 '미분류'로 묶어서, 검색 자체는 계속 가능하게 함."""
+    try:
+        s = make_session(total=3, backoff_factor=1.0)
+        resp = s.get("https://raw.githubusercontent.com/FinanceData/KSIC/master/KSIC_09.csv.gz",
+                      timeout=(20, 30))
+        resp.raise_for_status()
+        ksic = pd.read_csv(io.BytesIO(resp.content), compression='gzip', dtype='str')
+        name_to_code = {}
+        for code, name in zip(ksic['Industy_code'], ksic['Industy_name']):
+            name = name.strip()
+            if name not in name_to_code or len(code) > len(name_to_code[name]):
+                name_to_code[name] = code
+    except Exception:
+        name_to_code = {}
+
+    mapping = {}
+    for nm in industry_names:
+        code = name_to_code.get(nm)
+        mapping[nm] = _code_to_daebunryu(code[:2]) if code else '미분류'
+    return mapping
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
 def load_dart_full_registry():
     """DART 기업개황(업종별) 화면의 '엑셀일괄' 다운로드를 그대로 받아온다.
@@ -176,24 +237,43 @@ NEGATIVE_WORDS = [
 ]
 
 
-def get_news_sentiment(session, client_id, client_secret, company_name, display=30):
-    """네이버 뉴스검색 API로 최근 기사 제목을 가져와 긍정/부정 단어 빈도를 세는 단순 방식.
-    정교한 감성분석이 아니라 참고용 신호일 뿐임."""
-    url = "https://openapi.naver.com/v1/search/news.json"
-    headers = {"X-Naver-Client-Id": client_id, "X-Naver-Client-Secret": client_secret}
-    params = {"query": company_name, "display": display, "sort": "date"}
+def get_kakao_analysis(session, rest_api_key, company_name, months=6, max_titles_shown=5):
+    """카카오(다음) 웹문서 검색 API로 최근 문서를 가져와서
+    1) 최근 제목 몇 개 (참고용, 사람이 직접 판단)
+    2) 최근 N개월 이내 문서 제목에 긍정/부정 단어가 몇 개 나오는지 세는 단순 방식의 5단계 분류
+    를 함께 반환한다. 정교한 감성분석이 아니라 참고용 신호일 뿐임."""
+    url = "https://dapi.kakao.com/v2/search/web"
+    headers = {"Authorization": f"KakaoAK {rest_api_key}"}
+    params = {"query": company_name, "sort": "recency", "size": 50}
     try:
         RATE_LIMITER.wait()
         r = session.get(url, headers=headers, params=params, timeout=(15, 15))
+        if r.status_code != 200:
+            err = f"카카오 API 오류: {r.status_code}"
+            return err, err
         data = r.json()
-        if 'errorCode' in data:
-            return f"네이버 API 오류: {data.get('errorMessage', data.get('errorCode'))}"
-        items = data.get('items', [])
-        if not items:
-            return '기사 없음'
+        docs = data.get('documents', [])
+        if not docs:
+            return '검색 결과 없음', '검색 결과 없음'
+
+        titles_all = [re.sub('<[^<]+?>', '', d.get('title', '')) for d in docs]
+        titles_preview = ' / '.join(titles_all[:max_titles_shown])
+
+        cutoff = pd.Timestamp.now(tz='Asia/Seoul') - pd.DateOffset(months=months)
+        recent_titles = []
+        for d in docs:
+            try:
+                dt = pd.to_datetime(d.get('datetime'))
+                if dt >= cutoff:
+                    recent_titles.append(re.sub('<[^<]+?>', '', d.get('title', '')))
+            except Exception:
+                continue
+
+        if not recent_titles:
+            return titles_preview, f'최근 {months}개월 내 기사 없음'
+
         pos = neg = 0
-        for it in items:
-            title = re.sub('<[^<]+?>', '', it.get('title', ''))
+        for title in recent_titles:
             for w in POSITIVE_WORDS:
                 if w in title:
                     pos += 1
@@ -202,17 +282,19 @@ def get_news_sentiment(session, client_id, client_secret, company_name, display=
                     neg += 1
         score = pos - neg
         if score >= 3:
-            return '매우 긍정'
+            label = '매우 긍정'
         elif score >= 1:
-            return '긍정'
+            label = '긍정'
         elif score == 0:
-            return '보통'
+            label = '보통'
         elif score >= -2:
-            return '부정'
+            label = '부정'
         else:
-            return '매우 부정'
+            label = '매우 부정'
+        return titles_preview, label
     except Exception as e:
-        return f"연결 오류: {e}"
+        err = f"연결 오류: {e}"
+        return err, err
 
 
 def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
@@ -278,12 +360,31 @@ industry_options = sorted(registry_df['업종명'].dropna().astype(str).str.stri
 industry_options = [x for x in industry_options if x]
 corp_type_options = sorted(registry_df['법인구분'].dropna().astype(str).unique().tolist())
 
+with st.spinner("업종 대분류 매핑 중... (최초 1회)"):
+    daebunryu_map = load_daebunryu_map(tuple(industry_options))
+registry_df['대분류'] = registry_df['업종명'].astype(str).str.strip().map(daebunryu_map).fillna('미분류')
+_order = [nm for nm, _, _ in DAEBUNRYU_RANGES] + ['미분류']
+_present = set(daebunryu_map.values())
+daebunryu_options = [x for x in _order if x in _present]
+
 with st.sidebar:
     st.header("🔎 필터 조건")
 
+    daebunryu_select = st.multiselect(
+        "업종 대분류 선택 (DART 대분류 기준)",
+        options=daebunryu_options, default=[],
+        help="먼저 대분류를 고르면 아래 '업종 선택' 목록이 그 안의 업종명으로 좁혀집니다.",
+    )
+    if daebunryu_select:
+        _filtered_industry_options = sorted(
+            nm for nm, db in daebunryu_map.items() if db in daebunryu_select
+        )
+    else:
+        _filtered_industry_options = industry_options
+
     industry_select = st.multiselect(
         "업종 선택 (DART 정밀 업종명, 목록에서 고르기)",
-        options=industry_options, default=[],
+        options=_filtered_industry_options, default=[],
     )
     industry_keywords = st.text_input("업종 키워드 검색 (콤마로 구분)", "")
     company_name_search = st.text_input(
@@ -325,15 +426,16 @@ with st.sidebar:
         max_workers = st.number_input("동시 요청 수", 1, 30, 10)
 
     st.markdown("---")
-    st.header("📰 뉴스 여론 (선택, 참고용)")
-    st.caption("기사 제목에 긍정/부정 단어가 얼마나 나오는지 세는 단순 방식입니다. 정확한 분석이 아니라 참고용입니다.")
-    fetch_sentiment = st.checkbox("최근 뉴스 여론 확인하기 (네이버 검색 API 키 필요)", value=False)
-    naver_client_id = ""
-    naver_client_secret = ""
-    if fetch_sentiment:
-        naver_client_id = st.text_input("네이버 API Client ID")
-        naver_client_secret = st.text_input("네이버 API Client Secret", type="password")
-        st.caption("developers.naver.com 에서 무료로 발급받을 수 있습니다 (하루 25,000건).")
+    st.header("📰 최근 소식 (선택, 참고용)")
+    st.caption(
+        "최근 검색되는 제목 몇 개를 보여주고, 최근 6개월 기사 제목에 긍정/부정 단어가 "
+        "얼마나 나오는지 세서 5단계(매우긍정~매우부정)로도 표시합니다. 정교한 분석이 아니라 참고용입니다."
+    )
+    fetch_titles = st.checkbox("최근 소식 제목 + 여론 확인하기 (카카오 REST API 키 필요)", value=False)
+    kakao_rest_key = ""
+    if fetch_titles:
+        kakao_rest_key = st.text_input("카카오 REST API 키", type="password")
+        st.caption("developers.kakao.com 에서 무료로 발급받을 수 있습니다.")
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
@@ -361,14 +463,17 @@ if run_btn:
 
     if company_name_search.strip():
         candidates = candidates[candidates['회사명'].str.contains(company_name_search.strip(), na=False)]
-    elif industry_select or kw_list:
-        mask = pd.Series(False, index=candidates.index)
-        if industry_select:
-            mask = mask | candidates['업종명'].isin(industry_select)
-        if kw_list:
-            pattern = '|'.join(kw_list)
-            mask = mask | candidates['업종명'].astype(str).str.contains(pattern, na=False)
-        candidates = candidates[mask]
+    else:
+        if daebunryu_select:
+            candidates = candidates[candidates['대분류'].isin(daebunryu_select)]
+        if industry_select or kw_list:
+            mask = pd.Series(False, index=candidates.index)
+            if industry_select:
+                mask = mask | candidates['업종명'].isin(industry_select)
+            if kw_list:
+                pattern = '|'.join(kw_list)
+                mask = mask | candidates['업종명'].astype(str).str.contains(pattern, na=False)
+            candidates = candidates[mask]
 
     if ceo_name_search.strip():
         candidates = candidates[candidates['대표자명'].astype(str).str.contains(ceo_name_search.strip(), na=False)]
@@ -472,36 +577,41 @@ if run_btn:
 
     output_df['기업정보(bizno)'] = final['사업자등록번호'].apply(bizno_url)
 
-    output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '업종', '법인구분', '대표자명',
+    output_df['대분류'] = final['대분류']
+
+    output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '대분류', '업종', '법인구분', '대표자명',
                             '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
                             '설립연도', '홈페이지 주소', '본사 위치']]
 
-    if fetch_sentiment:
-        if not naver_client_id or not naver_client_secret:
-            st.warning("뉴스 여론을 켜셨다면 네이버 API Client ID/Secret을 입력해주세요. (이 항목은 건너뜁니다)")
+    if fetch_titles:
+        if not kakao_rest_key:
+            st.warning("최근 소식을 켜셨다면 카카오 REST API 키를 입력해주세요. (이 항목은 건너뜁니다)")
         else:
-            news_session = make_session(total=2, backoff_factor=0.5)
-            progress4 = st.progress(0.0, text="뉴스 여론 조회 중...")
+            titles_session = make_session(total=2, backoff_factor=0.5)
+            progress5 = st.progress(0.0, text="최근 소식 조회 중...")
             names = output_df['회사명'].tolist()
+            title_results = [None] * len(names)
             sentiment_results = [None] * len(names)
-            executor4 = ThreadPoolExecutor(max_workers=10)
+            executor5 = ThreadPoolExecutor(max_workers=10)
             try:
                 future_map = {
-                    executor4.submit(get_news_sentiment, news_session, naver_client_id,
-                                      naver_client_secret, nm): i
+                    executor5.submit(get_kakao_analysis, titles_session, kakao_rest_key, nm): i
                     for i, nm in enumerate(names)
                 }
                 done = 0
                 for fut in as_completed(future_map):
                     idx = future_map[fut]
-                    sentiment_results[idx] = fut.result()
+                    titles_preview, sentiment_label = fut.result()
+                    title_results[idx] = titles_preview
+                    sentiment_results[idx] = sentiment_label
                     done += 1
-                    progress4.progress(done / len(names), text=f"뉴스 여론 조회 중... ({done}/{len(names)})")
+                    progress5.progress(done / len(names), text=f"최근 소식 조회 중... ({done}/{len(names)})")
             finally:
-                executor4.shutdown(wait=False, cancel_futures=True)
-            progress4.empty()
+                executor5.shutdown(wait=False, cancel_futures=True)
+            progress5.empty()
 
-            output_df['뉴스여론(참고용)'] = sentiment_results
+            output_df['최근 소식 제목(참고용)'] = title_results
+            output_df['뉴스여론(최근6개월, 참고용)'] = sentiment_results
 
     st.success(f"최종 {len(output_df)}개사")
 
