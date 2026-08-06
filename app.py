@@ -149,9 +149,10 @@ def _code_to_daebunryu(code2):
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 7)
-def load_daebunryu_map(industry_names):
-    """업종명(정밀) -> 대분류 매핑. KSIC 코드표를 받아 역매핑한 뒤 대분류 범위로 그룹핑.
-    표기가 살짝 달라 매칭 안 되는 업종명은 '미분류'로 묶어서, 검색 자체는 계속 가능하게 함."""
+def load_industry_hierarchy(industry_names):
+    """업종명(정밀) -> {대분류, 중분류, 소분류, 세분류} 매핑.
+    KSIC 코드표를 받아 역매핑한 뒤, 코드 자릿수를 줄여가며 각 단계 이름을 구한다.
+    표기가 살짝 달라 매칭 안 되는 업종명은 모든 단계가 '미분류'로 묶여, 검색 자체는 계속 가능하다."""
     try:
         s = make_session(total=3, backoff_factor=1.0)
         resp = s.get("https://raw.githubusercontent.com/FinanceData/KSIC/master/KSIC_09.csv.gz",
@@ -159,17 +160,27 @@ def load_daebunryu_map(industry_names):
         resp.raise_for_status()
         ksic = pd.read_csv(io.BytesIO(resp.content), compression='gzip', dtype='str')
         name_to_code = {}
+        code_to_name = {}
         for code, name in zip(ksic['Industy_code'], ksic['Industy_name']):
             name = name.strip()
+            code_to_name[code] = name
             if name not in name_to_code or len(code) > len(name_to_code[name]):
                 name_to_code[name] = code
     except Exception:
-        name_to_code = {}
+        name_to_code, code_to_name = {}, {}
 
     mapping = {}
     for nm in industry_names:
         code = name_to_code.get(nm)
-        mapping[nm] = _code_to_daebunryu(code[:2]) if code else '미분류'
+        if not code:
+            mapping[nm] = {'대분류': '미분류', '중분류': '미분류', '소분류': '미분류', '세분류': '미분류'}
+            continue
+        mapping[nm] = {
+            '대분류': _code_to_daebunryu(code[:2]),
+            '중분류': code_to_name.get(code[:2], '미분류'),
+            '소분류': code_to_name.get(code[:3], '미분류'),
+            '세분류': code_to_name.get(code[:4], '미분류'),
+        }
     return mapping
 
 
@@ -360,33 +371,49 @@ industry_options = sorted(registry_df['업종명'].dropna().astype(str).str.stri
 industry_options = [x for x in industry_options if x]
 corp_type_options = sorted(registry_df['법인구분'].dropna().astype(str).unique().tolist())
 
-with st.spinner("업종 대분류 매핑 중... (최초 1회)"):
-    daebunryu_map = load_daebunryu_map(tuple(industry_options))
-registry_df['대분류'] = registry_df['업종명'].astype(str).str.strip().map(daebunryu_map).fillna('미분류')
+with st.spinner("업종 계층(대/중/소/세분류) 매핑 중... (최초 1회)"):
+    hierarchy_map = load_industry_hierarchy(tuple(industry_options))
+registry_df['대분류'] = registry_df['업종명'].astype(str).str.strip().map(
+    lambda x: hierarchy_map.get(x, {}).get('대분류', '미분류')
+)
+registry_df['중분류'] = registry_df['업종명'].astype(str).str.strip().map(
+    lambda x: hierarchy_map.get(x, {}).get('중분류', '미분류')
+)
+registry_df['소분류'] = registry_df['업종명'].astype(str).str.strip().map(
+    lambda x: hierarchy_map.get(x, {}).get('소분류', '미분류')
+)
 _order = [nm for nm, _, _ in DAEBUNRYU_RANGES] + ['미분류']
-_present = set(daebunryu_map.values())
+_present = set(v['대분류'] for v in hierarchy_map.values())
 daebunryu_options = [x for x in _order if x in _present]
 
 with st.sidebar:
     st.header("🔎 필터 조건")
+    st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
 
     daebunryu_select = st.multiselect(
-        "업종 대분류 선택 (DART 대분류 기준)",
-        options=daebunryu_options, default=[],
-        help="먼저 대분류를 고르면 아래 '업종 선택' 목록이 그 안의 업종명으로 좁혀집니다.",
+        "1단계: 업종 대분류", options=daebunryu_options, default=[],
     )
-    if daebunryu_select:
-        _filtered_industry_options = sorted(
-            nm for nm, db in daebunryu_map.items() if db in daebunryu_select
-        )
-    else:
-        _filtered_industry_options = industry_options
+    _pool = [nm for nm, h in hierarchy_map.items() if not daebunryu_select or h['대분류'] in daebunryu_select]
+
+    jungbunryu_options = sorted(set(hierarchy_map[nm]['중분류'] for nm in _pool))
+    jungbunryu_select = st.multiselect(
+        "2단계: 중분류", options=jungbunryu_options, default=[],
+    )
+    if jungbunryu_select:
+        _pool = [nm for nm in _pool if hierarchy_map[nm]['중분류'] in jungbunryu_select]
+
+    sobunryu_options = sorted(set(hierarchy_map[nm]['소분류'] for nm in _pool))
+    sobunryu_select = st.multiselect(
+        "3단계: 소분류", options=sobunryu_options, default=[],
+    )
+    if sobunryu_select:
+        _pool = [nm for nm in _pool if hierarchy_map[nm]['소분류'] in sobunryu_select]
 
     industry_select = st.multiselect(
-        "업종 선택 (DART 정밀 업종명, 목록에서 고르기)",
-        options=_filtered_industry_options, default=[],
+        "4단계: 업종 선택 (DART 정밀 업종명)",
+        options=sorted(_pool), default=[],
     )
-    industry_keywords = st.text_input("업종 키워드 검색 (콤마로 구분)", "")
+    industry_keywords = st.text_input("업종 키워드 검색 (콤마로 구분, 계단식과 별개로 전체에서 검색)", "")
     company_name_search = st.text_input(
         "회사명 검색 (Enter로 바로 검색)", "",
         key="company_name_search_input",
@@ -466,6 +493,10 @@ if run_btn:
     else:
         if daebunryu_select:
             candidates = candidates[candidates['대분류'].isin(daebunryu_select)]
+        if jungbunryu_select:
+            candidates = candidates[candidates['중분류'].isin(jungbunryu_select)]
+        if sobunryu_select:
+            candidates = candidates[candidates['소분류'].isin(sobunryu_select)]
         if industry_select or kw_list:
             mask = pd.Series(False, index=candidates.index)
             if industry_select:
