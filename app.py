@@ -93,10 +93,13 @@ def simplify_address(addr: str) -> str:
     return sido
 
 
-def _download_bytes(session, url, timeout=(20, 60), attempts=3):
-    """용량이 큰 파일도 안정적으로 받기 위해 스트리밍 + 재시도로 다운로드."""
+def _download_bytes(session, url, timeout=(20, 60), attempts=3, max_total_seconds=120):
+    """용량이 큰 파일도 안정적으로 받기 위해 스트리밍 + 재시도로 다운로드.
+    응답이 아주 느리게(찔끔찔끔) 들어오면 개별 read는 타임아웃에 안 걸려도
+    전체적으로 계속 늘어질 수 있어, 전체 소요 시간에도 상한선을 둔다."""
     last_err = None
     for attempt in range(attempts):
+        start = time.monotonic()
         try:
             with session.get(url, timeout=timeout, stream=True,
                               headers={"Accept-Encoding": "identity"}) as resp:
@@ -105,8 +108,10 @@ def _download_bytes(session, url, timeout=(20, 60), attempts=3):
                 for chunk in resp.iter_content(chunk_size=64 * 1024):
                     if chunk:
                         chunks.append(chunk)
+                    if time.monotonic() - start > max_total_seconds:
+                        raise TimeoutError(f"전체 다운로드가 {max_total_seconds}초를 넘어 중단함 (응답이 너무 느림)")
                 return b"".join(chunks)
-        except requests.exceptions.ConnectionError as e:
+        except (requests.exceptions.ConnectionError, TimeoutError) as e:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
     raise RuntimeError(f"다운로드 실패: {last_err}")
