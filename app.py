@@ -833,6 +833,30 @@ if "last_output_df" in st.session_state:
 
     buf = io.BytesIO()
     output_df.to_excel(buf, index=False)
+    buf.seek(0)
+
+    # 관련기사/기업정보(bizno)/홈페이지 주소 컬럼을 실제 클릭 가능한 하이퍼링크로 변환
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(buf)
+        ws = wb.active
+        headers = [cell.value for cell in ws[1]]
+        link_columns = ["관련기사", "기업정보(bizno)", "홈페이지 주소"]
+        for col_name in link_columns:
+            if col_name not in headers:
+                continue
+            col_idx = headers.index(col_name) + 1
+            for row in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row, column=col_idx)
+                url = cell.value
+                if url and isinstance(url, str) and url.strip():
+                    cell.hyperlink = url
+                    cell.style = "Hyperlink"
+        buf = io.BytesIO()
+        wb.save(buf)
+    except Exception:
+        buf.seek(0)  # 하이퍼링크 변환 실패해도 기본 엑셀은 그대로 다운로드되게 둠
+
     st.download_button(
         "📥 엑셀로 다운로드",
         data=buf.getvalue(),
