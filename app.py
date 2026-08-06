@@ -754,6 +754,7 @@ if "last_output_df" in st.session_state:
         key="results_table",
     )
 
+    st.caption(f"🔧 디버그: event.selection = {dict(event.selection) if event.selection else event.selection}")
     selected_rows = event.selection.rows
     if selected_rows:
         selected_industry = output_df.iloc[selected_rows[0]]['업종']
