@@ -236,10 +236,11 @@ def load_dart_full_registry():
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
 def load_kind_key_products():
-    """KRX KIND 상장법인목록에서 '주요제품' 텍스트만 가져온다 (상장사 대상, 브랜드명이 섞여 있는 경우가 많음)."""
+    """KRX KIND 상장법인목록에서 '주요제품' 텍스트만 가져온다 (상장사 대상, 브랜드명이 섞여 있는 경우가 많음).
+    실패해도 전체 로딩을 막지 않도록 재시도/타임아웃을 짧게 잡음."""
     kind_url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
-    s = make_session(total=3, backoff_factor=1.0)
-    resp = s.get(kind_url, timeout=(20, 20))
+    s = make_session(total=1, backoff_factor=0.5)
+    resp = s.get(kind_url, timeout=(10, 15))
     resp.raise_for_status()
     resp.encoding = 'euc-kr'
     kdf = pd.read_html(io.StringIO(resp.text), header=0)[0]
