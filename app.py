@@ -457,7 +457,26 @@ daebunryu_options = [x for x in _order if x in _present]
 
 # 결과표 아래 "재검색" 버튼에서 넘어온 값이 있으면, 위젯이 그려지기 전에 미리 반영
 if "pending_industry_search" in st.session_state:
-    st.session_state["industry_keywords_input"] = st.session_state.pop("pending_industry_search")
+    _picked = st.session_state.pop("pending_industry_search")  # 업종명 리스트
+
+    # 회사명 검색이 남아있으면 업종 필터를 건너뛰게 되므로 비워줌
+    st.session_state["company_name_search_input"] = ""
+
+    # 계단식 필터(대/중/소분류)에도 정확히 반영
+    _picked_in_map = [nm for nm in _picked if nm in hierarchy_map]
+    st.session_state["daebunryu_select_input"] = sorted(set(
+        hierarchy_map[nm]['대분류'] for nm in _picked_in_map
+    ))
+    st.session_state["jungbunryu_select_input"] = sorted(set(
+        hierarchy_map[nm]['중분류'] for nm in _picked_in_map
+    ))
+    st.session_state["sobunryu_select_input"] = sorted(set(
+        hierarchy_map[nm]['소분류'] for nm in _picked_in_map
+    ))
+    st.session_state["industry_select_input"] = sorted(set(_picked))
+
+    # 정확히 일치하는 업종을 4단계에서 이미 골랐으므로, 키워드 검색창은 비워서 중복/혼선 방지
+    st.session_state["industry_keywords_input"] = ""
     st.session_state["enter_pressed_search"] = True
 
 with st.sidebar:
@@ -466,12 +485,14 @@ with st.sidebar:
 
     daebunryu_select = st.multiselect(
         "1단계: 업종 대분류", options=daebunryu_options, default=[],
+        key="daebunryu_select_input",
     )
     _pool = [nm for nm, h in hierarchy_map.items() if not daebunryu_select or h['대분류'] in daebunryu_select]
 
     jungbunryu_options = sorted(set(hierarchy_map[nm]['중분류'] for nm in _pool))
     jungbunryu_select = st.multiselect(
         "2단계: 중분류", options=jungbunryu_options, default=[],
+        key="jungbunryu_select_input",
     )
     if jungbunryu_select:
         _pool = [nm for nm in _pool if hierarchy_map[nm]['중분류'] in jungbunryu_select]
@@ -479,13 +500,16 @@ with st.sidebar:
     sobunryu_options = sorted(set(hierarchy_map[nm]['소분류'] for nm in _pool))
     sobunryu_select = st.multiselect(
         "3단계: 소분류", options=sobunryu_options, default=[],
+        key="sobunryu_select_input",
     )
     if sobunryu_select:
         _pool = [nm for nm in _pool if hierarchy_map[nm]['소분류'] in sobunryu_select]
 
     industry_select = st.multiselect(
         "4단계: 업종 선택 (DART 정밀 업종명)",
-        options=sorted(_pool), default=[],
+        options=sorted(set(_pool) | set(st.session_state.get("industry_select_input", []))),
+        default=[],
+        key="industry_select_input",
     )
     industry_keywords = st.text_input(
         "업종 키워드 검색 (콤마로 구분, 계단식과 별개로 전체에서 검색)", "",
@@ -768,7 +792,7 @@ if "last_output_df" in st.session_state:
         picked_industries = sorted(output_df.loc[checked.index, '업종'].unique().tolist())
         st.caption(f"체크한 {len(checked)}개사의 업종: " + ", ".join(picked_industries))
         if st.button(f"이 업종({len(picked_industries)}개)으로 재검색"):
-            st.session_state["pending_industry_search"] = ", ".join(picked_industries)
+            st.session_state["pending_industry_search"] = picked_industries
             del st.session_state["last_output_df"]
             st.rerun()
     else:
