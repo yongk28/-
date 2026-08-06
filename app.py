@@ -1,23 +1,20 @@
 """
-OpenDART + KRX 기업 스크리너 - Streamlit 단일 페이지 앱
+DART 전체법인 + OpenDART 기업 스크리너 - Streamlit 단일 페이지 앱
 
 실행 방법:
-    pip install streamlit pandas requests openpyxl lxml finance-datareader
+    pip install streamlit pandas requests openpyxl
     streamlit run app.py
 
 배포 방법 (무료로 URL 받기):
     1. 이 파일을 GitHub 저장소에 올린다
     2. share.streamlit.io 에서 저장소 연결 -> 자동 배포
-    (API 키는 st.secrets 또는 화면에서 매번 입력하는 방식 사용 - 코드에 하드코딩하지 말 것)
+    (API 키는 화면에서 매번 입력하는 방식 - 코드에 하드코딩하지 말 것)
 """
 
 import io
 import re
 import time
 import threading
-import zipfile
-import datetime
-import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -48,21 +45,17 @@ class RateLimiter:
             self.last_call = time.monotonic()
 
 
-# 초당 최대 약 15건으로 제한 (OpenDART 쪽 속도 제한에 덜 걸리도록)
 RATE_LIMITER = RateLimiter(min_interval_sec=1 / 15)
 
 
 def make_session(total=8, backoff_factor=1.5):
-    """일시적인 연결 끊김에 대비해 재시도 로직이 포함된 세션 생성.
-    total/backoff_factor를 낮추면 실패 시 더 빨리 포기하고 넘어갑니다."""
+    """일시적인 연결 끊김에 대비해 재시도 로직이 포함된 세션 생성."""
     s = requests.Session()
     s.headers.update({
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         ),
-        # 재사용하던 연결이 서버 쪽에서 이미 끊긴 걸 모르고 재사용하다가
-        # "Connection reset by peer"가 나는 걸 막기 위해, 매번 새 연결을 맺도록 강제
         "Connection": "close",
     })
     retry = Retry(
@@ -76,6 +69,7 @@ def make_session(total=8, backoff_factor=1.5):
     s.mount("http://", adapter)
     return s
 
+
 SIDO_MAP = {
     '서울특별시': '서울', '부산광역시': '부산', '대구광역시': '대구', '인천광역시': '인천',
     '광주광역시': '광주', '대전광역시': '대전', '울산광역시': '울산', '세종특별자치시': '세종',
@@ -86,7 +80,7 @@ SIDO_MAP = {
 
 
 def simplify_address(addr: str) -> str:
-    if not addr:
+    if not addr or not isinstance(addr, str):
         return ''
     addr = addr.strip()
     tokens = addr.split()
@@ -99,127 +93,66 @@ def simplify_address(addr: str) -> str:
     return sido
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 7)
-def load_ksic_table():
-    """한국표준산업분류(KSIC) 코드->업종명 매핑표 (공개 데이터, 1주일 캐시)"""
-    url = "https://raw.githubusercontent.com/FinanceData/KSIC/master/KSIC_09.csv.gz"
-    s = make_session(total=3, backoff_factor=1.0)
-    resp = s.get(url, timeout=(20, 30))
-    resp.raise_for_status()
-    df = pd.read_csv(io.BytesIO(resp.content), compression='gzip', dtype='str')
-    return dict(zip(df['Industy_code'], df['Industy_name']))
-
-
-def code_to_industry_name(code, ksic_map):
-    """업종코드를 실제 업종명으로 변환. 정확히 안 맞으면 자릿수를 줄여가며 상위 분류로 시도."""
-    if not code:
-        return ''
-    code = code.strip()
-    for length in (len(code), 5, 4, 3, 2):
-        candidate = code[:length]
-        if candidate in ksic_map:
-            return ksic_map[candidate]
-    return ''
-
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
-def load_company_details_bulk(corp_map: dict, api_key: str, max_workers: int = 10):
-    """상장사 전체(약 2,500개)의 기업개황(주소/설립일/정밀업종)을 한 번에 받아서 캐시.
-    이후 검색할 때마다 다시 조회하지 않고 이 캐시를 재사용한다."""
-    ksic_map = load_ksic_table()
-    session = make_session(total=2, backoff_factor=0.5)
-
-    def _fetch(stock_code, corp_code):
-        url = "https://opendart.fss.or.kr/api/company.json"
-        params = {"crtfc_key": api_key, "corp_code": corp_code}
-        try:
-            RATE_LIMITER.wait()
-            r = session.get(url, params=params, timeout=(20, 15))
-            data = r.json()
-            if data.get('status') != '000':
-                return stock_code, '', '', ''
-            return stock_code, data.get('adres', ''), data.get('est_dt', ''), data.get('induty_code', '')
-        except Exception:
-            return stock_code, '', '', ''
-
-    rows = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_fetch, sc, cc) for sc, cc in corp_map.items()]
-        for fut in as_completed(futures):
-            stock_code, adres, est_dt, induty_code = fut.result()
-            rows.append({
-                '종목코드': stock_code,
-                '본사_위치': simplify_address(adres),
-                '설립일': est_dt,
-                '설립연도': get_founding_year(est_dt),
-                '상세업종': code_to_industry_name(induty_code, ksic_map),
-            })
-    return pd.DataFrame(rows)
-
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
-def load_kind_listing():
-    """KRX KIND 상장법인목록 전체 다운로드 (하루 1회만 다시 받음)"""
-    kind_url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
-    # pd.read_html이 URL을 직접 받으면 내부적으로 urllib을 써서 User-Agent가 안 붙다보니
-    # KRX 쪽에서 차단하는 경우가 있어, requests로 먼저 받아온 뒤 그 내용을 파싱한다.
-    s = make_session(total=3, backoff_factor=1.0)
-    resp = s.get(kind_url, timeout=(20, 20))
-    resp.raise_for_status()
-    resp.encoding = 'euc-kr'
-    df = pd.read_html(io.StringIO(resp.text), header=0)[0]
-    df['종목코드'] = df['종목코드'].astype(str).str.zfill(6)
-    df = df.rename(columns={'주요제품': '대표상품_브랜드', '홈페이지': '홈페이지_주소'})
-
-    # 시장구분(코스피/코스닥/코넥스)은 무거운 시세 데이터 라이브러리 대신,
-    # KIND 자체의 시장별 다운로드(marketType 파라미터)로 가볍게 태깅한다.
-    market_map = {}
-    for market_name, market_type in [('KOSPI', 'stockMkt'), ('KOSDAQ', 'kosdaqMkt'), ('KONEX', 'konexMkt')]:
-        try:
-            m_url = f"https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&marketType={market_type}"
-            m_resp = s.get(m_url, timeout=(20, 20))
-            m_resp.raise_for_status()
-            m_resp.encoding = 'euc-kr'
-            m_df = pd.read_html(io.StringIO(m_resp.text), header=0)[0]
-            for c in m_df['종목코드'].astype(str).str.zfill(6):
-                market_map[c] = market_name
-        except Exception:
-            pass
-    df['시장구분'] = df['종목코드'].map(market_map).fillna('기타')
-    return df
-
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
-def load_corp_map(api_key: str):
-    """OpenDART corpCode.xml -> {종목코드: corp_code} 매핑 (하루 1회만 다시 받음)"""
-    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
-    s = make_session(total=3, backoff_factor=1.5)
-    # 이 파일은 용량이 커서 한 번에 왕창 받다가 끊기는 경우가 있어,
-    # 스트리밍으로 조금씩 나눠 받도록 하고, 압축 응답 대신 원본을 요청함
-    headers = {"Accept-Encoding": "identity"}
-
+def _download_bytes(session, url, timeout=(20, 60), attempts=3):
+    """용량이 큰 파일도 안정적으로 받기 위해 스트리밍 + 재시도로 다운로드."""
     last_err = None
-    content = None
-    for attempt in range(3):
+    for attempt in range(attempts):
         try:
-            with s.get(url, timeout=(20, 60), stream=True, headers=headers) as resp:
+            with session.get(url, timeout=timeout, stream=True,
+                              headers={"Accept-Encoding": "identity"}) as resp:
                 resp.raise_for_status()
                 chunks = []
                 for chunk in resp.iter_content(chunk_size=64 * 1024):
                     if chunk:
                         chunks.append(chunk)
-                content = b"".join(chunks)
-            break
+                return b"".join(chunks)
         except requests.exceptions.ConnectionError as e:
             last_err = e
             time.sleep(1.5 * (attempt + 1))
-            continue
+    raise RuntimeError(f"다운로드 실패: {last_err}")
 
-    if content is None:
-        raise RuntimeError(
-            f"OpenDART 서버에 연결할 수 없습니다: {last_err}\n"
-            "네트워크(방화벽/백신/사내망) 문제일 수 있습니다. 잠시 후 다시 시도해보세요."
-        )
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def load_dart_full_registry():
+    """DART 기업개황(업종별) 화면의 '엑셀일괄' 다운로드를 그대로 받아온다.
+    상장/비상장 포함 DART 등록법인 전체(약 11만개+)에 실제 업종명이 붙어 있어,
+    KRX 상장법인목록보다 훨씬 정확하고 넓은 범위를 커버한다. API 키 불필요."""
+    session = make_session(total=3, backoff_factor=1.5)
+    # 서버가 세션(쿠키) 기반으로 동작할 수 있어, 검색 화면을 먼저 방문한 뒤 같은 세션으로 다운로드한다
+    try:
+        session.get("https://dart.fss.or.kr/dsae001/main.do", timeout=(20, 20))
+    except Exception:
+        pass
+
+    content = _download_bytes(
+        session, "https://dart.fss.or.kr/dsae001/downloadExcel.do", timeout=(20, 90)
+    )
+    df = pd.read_excel(io.BytesIO(content))
+
+    df['종목코드'] = df['종목코드'].astype(str).str.strip()
+    df.loc[df['종목코드'] == '', '종목코드'] = None
+    df['회사명'] = df['회사이름'].astype(str).str.strip()
+    df['본사_위치'] = df['주소'].apply(simplify_address)
+
+    def _year(x):
+        try:
+            return int(str(x)[:4])
+        except Exception:
+            return None
+    df['설립연도'] = df['설립일'].apply(_year)
+
+    return df
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def load_corp_map(api_key: str):
+    """OpenDART corpCode.xml -> {종목코드: corp_code} 매핑. 매출 조회 시에만 필요."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+
+    url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
+    session = make_session(total=3, backoff_factor=1.5)
+    content = _download_bytes(session, url, timeout=(20, 60))
 
     zf = zipfile.ZipFile(io.BytesIO(content))
     xml_bytes = zf.read(zf.namelist()[0])
@@ -234,9 +167,7 @@ def load_corp_map(api_key: str):
 
 
 def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
-    # fnlttSinglAcntAll(전체 재무제표)는 계열사가 많은 대기업일수록 응답이 매우 커져서
-    # 연결이 끊기는 문제가 있었음. 필요한 3개 계정만 표준화해서 돌려주는
-    # fnlttSinglAcnt(주요계정) API로 교체 - 훨씬 가볍고 안정적임.
+    """fnlttSinglAcnt(주요계정) API - 매출액/영업이익/당기순이익만 가볍게 조회"""
     url = "https://opendart.fss.or.kr/api/fnlttSinglAcnt.json"
     params = {"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": bsns_year, "reprt_code": reprt_code}
     try:
@@ -257,7 +188,6 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
             if nm in ('매출액', '수익(매출액)') and revenue is None:
                 revenue = amt
             elif nm == '영업수익' and revenue_fallback is None:
-                # 보험/증권/지주회사 등은 매출액 대신 '영업수익'으로 표기하는 경우가 많음
                 revenue_fallback = amt
             elif nm == '영업이익' and op_profit is None:
                 op_profit = amt
@@ -267,129 +197,93 @@ def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
             revenue = revenue_fallback
         if revenue is None:
             return None, op_profit, net_income, (
-                "OpenDART 응답은 정상이지만 '매출액'에 해당하는 계정을 못 찾음 "
-                "(계정명이 다르게 표기됐을 수 있음)"
+                "OpenDART 응답은 정상이지만 '매출액'에 해당하는 계정을 못 찾음"
             )
         return revenue, op_profit, net_income, None
     except Exception as e:
         return None, None, None, f"연결 오류: {e}"
 
 
-def get_company_detail(session, api_key, corp_code):
-    url = "https://opendart.fss.or.kr/api/company.json"
-    params = {"crtfc_key": api_key, "corp_code": corp_code}
-    try:
-        RATE_LIMITER.wait()
-        r = session.get(url, params=params, timeout=(20, 15))
-        data = r.json()
-        if data.get('status') == '000':
-            return data.get('adres', ''), data.get('est_dt', '')
-        return '', ''
-    except Exception:
-        return '', ''
-
-
-def get_founding_year(est_dt):
-    try:
-        return int(est_dt[:4])
-    except Exception:
-        return None
-
-
 # ---------------- UI ----------------
 
 st.title("📊 조건 기반 기업 스크리너")
-st.caption("KRX 상장법인 + OpenDART 공시 데이터를 기반으로 조건에 맞는 기업을 찾습니다.")
+st.caption("DART 등록법인 전체(상장+비상장) 기준으로 업종/지역/설립연도 등을 필터링합니다. "
+           "매출 조회는 상장사에 한해 선택적으로 가능합니다.")
 
-# API 키 없이도 되는 KRX 목록은 앱 시작할 때 미리 불러와서, 업종 선택 목록을 만드는 데 씁니다.
-# (하루 1회만 실제로 다시 받아오고 그 외엔 캐시를 사용하므로 매번 느려지지 않습니다)
-with st.spinner("업종 목록 불러오는 중..."):
+with st.spinner("DART 전체법인 목록 불러오는 중... (최초 1회, 파일이 커서 1분 정도 걸릴 수 있습니다)"):
     try:
-        _kind_df_for_ui = load_kind_listing()
-        industry_options = sorted(_kind_df_for_ui['업종'].dropna().astype(str).unique().tolist())
-    except Exception:
-        _kind_df_for_ui = None
-        industry_options = []
+        registry_df = load_dart_full_registry()
+        load_error = None
+    except Exception as e:
+        registry_df = None
+        load_error = str(e)
+
+if load_error:
+    st.error(
+        f"DART 전체법인 목록을 못 가져왔습니다: {load_error}\n\n"
+        "잠시 후 새로고침해서 다시 시도해보세요."
+    )
+    st.stop()
+
+industry_options = sorted(registry_df['업종명'].dropna().astype(str).str.strip().unique().tolist())
+industry_options = [x for x in industry_options if x]
+corp_type_options = sorted(registry_df['법인구분'].dropna().astype(str).unique().tolist())
 
 with st.sidebar:
-    st.header("🔑 API 키")
-    api_key = st.text_input("OpenDART API 키", type="password", help="opendart.fss.or.kr 에서 발급받은 키")
-
-    # Streamlit Community Cloud에 배포된 경우(/mount/src 경로 사용) 이 프로세스를 강제로 죽이면
-    # 플랫폼이 앱 크래시로 인식해서 에러가 나므로, 로컬 실행일 때만 종료 버튼을 보여줌
-    import os
-    _is_cloud = os.path.abspath(__file__).startswith("/mount/src")
-    if not _is_cloud:
-        if st.button("🛑 앱 완전히 종료 (로컬 실행 전용)", use_container_width=True):
-            st.warning("앱을 종료합니다. 이 브라우저 탭은 이제 닫으셔도 됩니다.")
-            os._exit(0)
-
-    st.markdown("---")
     st.header("🔎 필터 조건")
 
     industry_select = st.multiselect(
-        "업종 선택 (목록에서 고르기)",
-        options=industry_options,
-        default=[],
-        help="KRX에 등록된 실제 업종명 중에서 정확히 골라서 필터링합니다.",
+        "업종 선택 (DART 정밀 업종명, 목록에서 고르기)",
+        options=industry_options, default=[],
     )
-    industry_keywords = st.text_input(
-        "업종/주요제품 키워드 검색 (콤마로 구분, 위 목록에 없는 것도 잡고 싶을 때)", ""
-    )
-    whitelist_names = st.text_input("강제 포함 회사명 (콤마로 구분)", "")
-    def _trigger_search_on_enter():
-        st.session_state["enter_pressed_search"] = True
-
+    industry_keywords = st.text_input("업종 키워드 검색 (콤마로 구분)", "")
     company_name_search = st.text_input(
-        "회사명 검색 (입력 후 Enter를 누르면 바로 검색됩니다)", "",
-        key="company_name_search_input", on_change=_trigger_search_on_enter,
+        "회사명 검색 (Enter로 바로 검색)", "",
+        key="company_name_search_input",
+        on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
     ceo_name_search = st.text_input("대표자명 검색", "")
-    market_filter = st.multiselect("시장구분", ["KOSPI", "KOSDAQ", "KONEX"], default=[])
-    settlement_month = st.text_input("결산월 (예: 12)", "")
-
-    st.markdown("**매출액(억원)**")
-    c1, c2 = st.columns(2)
-    min_rev = c1.number_input("최소", value=0, step=100, key="min_rev")
-    max_rev = c2.number_input("최대", value=10000000, step=100, key="max_rev")
-
-    st.markdown("**영업이익(억원)**")
-    c1, c2 = st.columns(2)
-    min_op = c1.number_input("최소", value=-10000000, step=100, key="min_op")
-    max_op = c2.number_input("최대", value=10000000, step=100, key="max_op")
-
-    st.markdown("**당기순이익(억원)**")
-    c1, c2 = st.columns(2)
-    min_ni = c1.number_input("최소", value=-10000000, step=100, key="min_ni")
-    max_ni = c2.number_input("최대", value=10000000, step=100, key="max_ni")
-
-    min_founding_year = st.number_input(
-        "설립연도 (이 연도 이후에 생긴 기업만, 0이면 필터 없음)", 0, 2100, 0
+    corp_type_filter = st.multiselect(
+        "법인구분", options=corp_type_options, default=[],
+        help="유가증권시장/코스닥시장/코넥스시장 = 상장사, 기타법인 = 비상장(외감대상)",
     )
     region_filter = st.text_input("본사 지역 (예: 서울)", "")
+    min_founding_year = st.number_input("설립연도 (이후 설립된 기업만, 0=필터 없음)", 0, 2100, 0)
+    top_n = st.number_input("최대 결과 개수", 1, 2000, 200)
 
-    bsns_year = st.text_input("조회 사업연도", "2025")
-    top_n = st.number_input("최대 결과 개수", 1, 500, 100)
-    max_workers = st.number_input("동시 요청 수", 1, 30, 10)
+    st.markdown("---")
+    st.header("💰 매출 조회 (선택, 상장사만 가능)")
+    fetch_revenue = st.checkbox("매출/영업이익/순이익도 같이 조회하기 (API 키 필요, 상장사만 해당)", value=False)
+    api_key = ""
+    bsns_year = "2025"
+    min_rev = max_rev = min_op = max_op = min_ni = max_ni = None
+    max_workers = 10
+    if fetch_revenue:
+        api_key = st.text_input("OpenDART API 키", type="password")
+        bsns_year = st.text_input("조회 사업연도", "2025")
+        st.markdown("**매출액(억원)**")
+        c1, c2 = st.columns(2)
+        min_rev = c1.number_input("최소", value=0, step=100, key="min_rev")
+        max_rev = c2.number_input("최대", value=10000000, step=100, key="max_rev")
+        st.markdown("**영업이익(억원)**")
+        c1, c2 = st.columns(2)
+        min_op = c1.number_input("최소", value=-10000000, step=100, key="min_op")
+        max_op = c2.number_input("최대", value=10000000, step=100, key="max_op")
+        st.markdown("**당기순이익(억원)**")
+        c1, c2 = st.columns(2)
+        min_ni = c1.number_input("최소", value=-10000000, step=100, key="min_ni")
+        max_ni = c2.number_input("최대", value=10000000, step=100, key="max_ni")
+        max_workers = st.number_input("동시 요청 수", 1, 30, 10)
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
 
-if not api_key:
-    st.info("왼쪽 사이드바에 OpenDART API 키를 입력하면 시작할 수 있습니다.")
-    st.stop()
-
-# 이전 검색이 Stop 등으로 중단됐다면, 백그라운드에 남아있는 요청들이 정리될 시간을 줌
 COOLDOWN_SEC = 65
 if st.session_state.get("still_running", False):
     elapsed = time.time() - st.session_state.get("last_dispatch_ts", 0)
     remaining = COOLDOWN_SEC - elapsed
     if remaining > 0:
-        st.warning(
-            f"⏳ 이전 검색이 중간에 중단된 것 같습니다. 백그라운드에 남아있는 요청이 "
-            f"정리될 때까지 약 **{int(remaining)}초** 더 기다려주세요. "
-            "(이 시간 안에 다시 검색하면 서로 꼬여서 더 오래 걸릴 수 있어요)"
-        )
+        st.warning(f"⏳ 이전 검색이 중간에 중단된 것 같습니다. 약 **{int(remaining)}초** 더 기다려주세요.")
         time.sleep(1)
         st.rerun()
     else:
@@ -397,184 +291,126 @@ if st.session_state.get("still_running", False):
 
 if run_btn:
     st.session_state["enter_pressed_search"] = False
-    with st.spinner("KRX 상장법인 목록 로딩 중... (최초 1회, 캐시되어 다음부터는 빠릅니다)"):
-        try:
-            kind_df = load_kind_listing()
-            corp_map = load_corp_map(api_key)
-        except RuntimeError as e:
-            st.error(str(e))
-            st.stop()
-        except requests.exceptions.ConnectionError:
-            st.error(
-                "서버 연결이 중간에 끊겼습니다 (네트워크/방화벽/백신 문제일 가능성). "
-                "잠시 후 다시 시도하시거나, 다른 네트워크(휴대폰 핫스팟 등)에서 시도해보세요."
-            )
-            st.stop()
 
-    with st.spinner(
-        "상장사 전체의 정밀 업종/주소/설립일 정보 로딩 중... "
-        "(최초 1회, 2~3분 정도 걸릴 수 있으며 이후엔 캐시되어 빠릅니다)"
-    ):
-        try:
-            details_df = load_company_details_bulk(corp_map, api_key, max_workers=int(max_workers))
-            kind_df = kind_df.merge(details_df, on='종목코드', how='left')
-        except Exception as e:
-            st.warning(f"정밀 업종/주소 정보를 못 가져왔습니다 (건너뛰고 진행합니다): {e}")
-            kind_df['상세업종'] = ''
-            kind_df['본사_위치'] = ''
-            kind_df['설립연도'] = None
+    if fetch_revenue and not api_key:
+        st.warning("매출 조회를 켜셨다면 OpenDART API 키를 입력해주세요.")
+        st.stop()
 
-    # 서버가 한동안 쉬고 있다가 오랜만에 외부로 나가는 첫 연결이 유독 느린 경우가 있어서,
-    # 본격적으로 회사들을 조회하기 전에 미리 한 번 가볍게 요청을 보내 연결을 깨워둠 (실패해도 무시)
-    try:
-        warmup_session = make_session(total=1, backoff_factor=0.3)
-        warmup_session.get(
-            "https://opendart.fss.or.kr/api/company.json",
-            params={"crtfc_key": api_key, "corp_code": "00126380"},
-            timeout=(30, 20),
-        )
-    except Exception:
-        pass
-
-    candidates = kind_df.copy()
-    st.session_state["still_running"] = True
-    st.session_state["last_dispatch_ts"] = time.time()
+    candidates = registry_df.copy()
     kw_list = [k.strip() for k in industry_keywords.split(',') if k.strip()]
-    wl_list = [k.strip() for k in whitelist_names.split(',') if k.strip()]
 
-    # 회사명을 직접 검색하는 경우, 업종 필터는 건너뛰고 이름으로만 바로 찾습니다.
-    # (업종 필터가 남아있는 채로 특정 회사를 찾으면 업종이 안 맞아 빠지는 혼란을 방지)
     if company_name_search.strip():
-        candidates = candidates[candidates['회사명'].astype(str).str.contains(company_name_search.strip(), na=False)]
+        candidates = candidates[candidates['회사명'].str.contains(company_name_search.strip(), na=False)]
     elif industry_select or kw_list:
         mask = pd.Series(False, index=candidates.index)
         if industry_select:
-            mask = mask | candidates['업종'].isin(industry_select)
+            mask = mask | candidates['업종명'].isin(industry_select)
         if kw_list:
             pattern = '|'.join(kw_list)
-            mask = mask | candidates['업종'].astype(str).str.contains(pattern, na=False)
-            mask = mask | candidates['대표상품_브랜드'].astype(str).str.contains(pattern, na=False)
-            if '상세업종' in candidates.columns:
-                # DART 기업개황 기준 정밀 업종명(예: '화장품 제조업')도 같이 검사
-                mask = mask | candidates['상세업종'].astype(str).str.contains(pattern, na=False)
+            mask = mask | candidates['업종명'].astype(str).str.contains(pattern, na=False)
         candidates = candidates[mask]
 
-    if ceo_name_search.strip() and '대표자명' in candidates.columns:
+    if ceo_name_search.strip():
         candidates = candidates[candidates['대표자명'].astype(str).str.contains(ceo_name_search.strip(), na=False)]
 
-    if market_filter:
-        candidates = candidates[candidates['시장구분'].isin(market_filter)]
+    if corp_type_filter:
+        candidates = candidates[candidates['법인구분'].isin(corp_type_filter)]
 
-    if settlement_month.strip() and '결산월' in candidates.columns:
-        candidates = candidates[candidates['결산월'].astype(str).str.contains(settlement_month.strip(), na=False)]
+    if min_founding_year and min_founding_year > 0:
+        candidates = candidates[candidates['설립연도'].isna() | (candidates['설립연도'] >= min_founding_year)]
 
-    if wl_list:
-        wl_matches = kind_df[kind_df['회사명'].isin(wl_list)]
-        candidates = pd.concat([candidates, wl_matches]).drop_duplicates(subset='종목코드')
+    if region_filter.strip():
+        candidates = candidates[candidates['본사_위치'].str.contains(region_filter.strip(), na=False)]
 
     candidates = candidates.reset_index(drop=True)
     st.write(f"1차 필터 후 후보 기업 수: **{len(candidates)}**")
 
     if len(candidates) == 0:
         st.warning("조건에 맞는 후보가 없습니다. 필터를 완화해보세요.")
-        st.session_state["still_running"] = False
         st.stop()
 
-    # 회사 하나하나마다 반복되는 요청이라, 재시도/타임아웃을 가볍게 해서
-    # 실패하는 소수 회사 때문에 전체가 오래 걸리지 않도록 함
-    session = make_session(total=2, backoff_factor=0.5)
+    final = candidates.copy()
+    final['매출액(억원)'] = None
+    final['영업이익(억원)'] = None
+    final['당기순이익(억원)'] = None
+    final['실패사유'] = None
 
-    progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
-    rows = [row for _, row in candidates.iterrows()]
-    results = []
-    executor = ThreadPoolExecutor(max_workers=int(max_workers))
-    try:
-        future_map = {}
-        for row in rows:
-            code = row['종목코드']
-            corp_code = corp_map.get(code)
-            if not corp_code:
-                continue
-            fut = executor.submit(get_financials, session, api_key, corp_code, bsns_year, "11011")
-            future_map[fut] = (row, corp_code)
-        done = 0
-        for fut in as_completed(future_map):
-            row, corp_code = future_map[fut]
-            revenue, op_profit, net_income, reason = fut.result()
-            results.append({
-                '종목코드': row['종목코드'], 'corp_code': corp_code, '기업명': row['회사명'], '업종': row['업종'],
-                '상세업종': row.get('상세업종'),
-                '대표상품_브랜드': row.get('대표상품_브랜드'), '홈페이지_주소': row.get('홈페이지_주소'),
-                '시장구분': row.get('시장구분'), '대표자명': row.get('대표자명'), '결산월': row.get('결산월'),
-                '본사_위치': row.get('본사_위치'), '설립연도': row.get('설립연도'),
-                '매출액_억': (revenue / 1e8) if revenue is not None else None,
-                '영업이익_억': (op_profit / 1e8) if op_profit is not None else None,
-                '당기순이익_억': (net_income / 1e8) if net_income is not None else None,
-                '실패사유': reason,
-            })
-            done += 1
-            progress.progress(done / len(future_map), text=f"매출/영업이익/순이익 조회 중... ({done}/{len(future_map)})")
-    finally:
-        # Stop 버튼 등으로 중단되더라도, 아직 시작 안 한 대기 작업은 즉시 취소해서
-        # 다음 검색이 밀리지 않도록 함 (이미 시작된 요청은 자연 종료될 때까지 어쩔 수 없음)
-        executor.shutdown(wait=False, cancel_futures=True)
-    progress.empty()
+    if fetch_revenue:
+        st.session_state["still_running"] = True
+        st.session_state["last_dispatch_ts"] = time.time()
+        try:
+            corp_map = load_corp_map(api_key)
+        except Exception as e:
+            st.error(f"OpenDART corp_code 매핑을 못 가져왔습니다: {e}")
+            st.session_state["still_running"] = False
+            st.stop()
 
-    df_result = pd.DataFrame(results)
-    if df_result.empty:
-        st.warning("매출 데이터를 확보한 회사가 없습니다.")
+        listed = final[final['종목코드'].notna()].copy()
+        unlisted_count = len(final) - len(listed)
+        if unlisted_count > 0:
+            st.caption(f"비상장(기타법인) {unlisted_count}개사는 매출 조회 대상이 아니라 매출 없이 표시됩니다.")
+
+        session = make_session(total=2, backoff_factor=0.5)
+        progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
+        results = {}
+        executor = ThreadPoolExecutor(max_workers=int(max_workers))
+        try:
+            future_map = {}
+            for idx, row in listed.iterrows():
+                corp_code = corp_map.get(row['종목코드'])
+                if not corp_code:
+                    continue
+                fut = executor.submit(get_financials, session, api_key, corp_code, bsns_year, "11011")
+                future_map[fut] = idx
+            done = 0
+            for fut in as_completed(future_map):
+                idx = future_map[fut]
+                revenue, op_profit, net_income, reason = fut.result()
+                results[idx] = (revenue, op_profit, net_income, reason)
+                done += 1
+                if len(future_map):
+                    progress.progress(done / len(future_map),
+                                       text=f"매출/영업이익/순이익 조회 중... ({done}/{len(future_map)})")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        progress.empty()
         st.session_state["still_running"] = False
-        st.stop()
 
-    no_data = df_result[df_result['매출액_억'].isna()]
-    if not no_data.empty:
-        with st.expander(f"⚠️ 매출 데이터를 못 가져온 회사 {len(no_data)}개 (클릭해서 보기)"):
-            st.write(
-                "'실패사유'가 **'연결 오류'**로 시작하면 네트워크 문제라 재시도하면 될 수 있습니다. "
-                "**'OpenDART 응답'**으로 시작하면 그 회사가 이 조건(사업연도/보고서 종류)으로는 "
-                "실제로 데이터가 없다는 뜻이라, 재시도해도 똑같이 나올 가능성이 높습니다."
-            )
-            st.dataframe(no_data[['기업명', '종목코드', '실패사유']], use_container_width=True)
+        for idx, (revenue, op_profit, net_income, reason) in results.items():
+            final.at[idx, '매출액(억원)'] = (revenue / 1e8) if revenue is not None else None
+            final.at[idx, '영업이익(억원)'] = (op_profit / 1e8) if op_profit is not None else None
+            final.at[idx, '당기순이익(억원)'] = (net_income / 1e8) if net_income is not None else None
+            final.at[idx, '실패사유'] = reason
 
-    filtered = df_result.dropna(subset=['매출액_억']).copy()
-    filtered = filtered[(filtered['매출액_억'] >= min_rev) & (filtered['매출액_억'] <= max_rev)]
-    filtered = filtered[filtered['영업이익_억'].isna() | ((filtered['영업이익_억'] >= min_op) & (filtered['영업이익_억'] <= max_op))]
-    filtered = filtered[filtered['당기순이익_억'].isna() | ((filtered['당기순이익_억'] >= min_ni) & (filtered['당기순이익_억'] <= max_ni))]
-    filtered = filtered.reset_index(drop=True)
+        no_data = final[final['종목코드'].notna() & final['매출액(억원)'].isna()]
+        if not no_data.empty:
+            with st.expander(f"⚠️ 매출 데이터를 못 가져온 상장사 {len(no_data)}개 (클릭해서 보기)"):
+                st.dataframe(no_data[['회사명', '종목코드', '실패사유']], use_container_width=True)
 
-    st.write(f"매출/영업이익/순이익 조건 통과: **{len(filtered)}**개사")
+        for col, mn, mx in [('매출액(억원)', min_rev, max_rev),
+                             ('영업이익(억원)', min_op, max_op),
+                             ('당기순이익(억원)', min_ni, max_ni)]:
+            final[col] = pd.to_numeric(final[col], errors='coerce')
+            final = final[final[col].isna() | ((final[col] >= mn) & (final[col] <= mx))]
 
-    if len(filtered) == 0:
-        st.warning("조건에 맞는 회사가 없습니다. 필터를 완화해보세요.")
-        st.session_state["still_running"] = False
-        st.stop()
-
-    final = filtered.copy()
-    if min_founding_year and min_founding_year > 0:
-        final = final[final['설립연도'].isna() | (final['설립연도'] >= min_founding_year)]
-
-    if region_filter.strip():
-        final = final[final['본사_위치'].str.contains(region_filter.strip(), na=False)]
-
-    final = final.sort_values('매출액_억', ascending=False).head(int(top_n)).reset_index(drop=True)
-    for col in ['매출액_억', '영업이익_억', '당기순이익_억']:
+    final = final.sort_values(
+        '매출액(억원)', ascending=False, na_position='last'
+    ).head(int(top_n)).reset_index(drop=True)
+    for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         final[col] = pd.to_numeric(final[col], errors='coerce').round(0).astype('Int64')
 
     output_df = final.rename(columns={
-        '대표상품_브랜드': '대표상품 or 브랜드', '매출액_억': '매출액(억원)', '영업이익_억': '영업이익(억원)',
-        '당기순이익_억': '당기순이익(억원)', '홈페이지_주소': '홈페이지 주소', '본사_위치': '본사 위치',
-        '상세업종': '정밀업종(DART기준)'
+        '업종명': '업종', '홈페이지': '홈페이지 주소', '본사_위치': '본사 위치',
     })
-    output_df['관련기사'] = output_df['기업명'].apply(
+    output_df['관련기사'] = output_df['회사명'].apply(
         lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(str(name))}"
     )
-    output_df = output_df[['기업명', '관련기사', '업종', '정밀업종(DART기준)', '대표상품 or 브랜드', '시장구분',
-                            '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '설립연도',
-                            '홈페이지 주소', '본사 위치']]
+    output_df = output_df[['회사명', '관련기사', '업종', '법인구분', '대표자명',
+                            '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
+                            '설립연도', '홈페이지 주소', '본사 위치']]
 
     st.success(f"최종 {len(output_df)}개사")
 
-    # 홈페이지 주소에 http(s):// 접두어가 없으면 붙여서, 링크가 실제로 동작하게 함
     def normalize_url(u):
         if not isinstance(u, str) or not u.strip():
             return None
@@ -585,7 +421,6 @@ if run_btn:
 
     output_df['홈페이지 주소'] = output_df['홈페이지 주소'].apply(normalize_url)
 
-    # 화면에 보여줄 때만 천 단위 콤마를 넣은 문자열로 변환 (엑셀 파일은 숫자 그대로 유지)
     display_df = output_df.copy()
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
@@ -607,6 +442,5 @@ if run_btn:
         file_name="screener_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    st.session_state["still_running"] = False
 else:
     st.info("왼쪽에서 조건을 입력하고 '검색 실행' 버튼을 누르세요.")
