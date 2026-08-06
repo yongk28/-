@@ -213,7 +213,69 @@ def load_dart_full_registry():
             return None
     df['설립연도'] = df['설립일'].apply(_year)
 
+    # 상장사는 KRX KIND의 '주요제품' 텍스트를 대표상품/브랜드로 병합 (비상장은 자동 소스가 없음)
+    try:
+        kind_df = load_kind_key_products()
+        df = df.merge(kind_df, on='종목코드', how='left')
+    except Exception:
+        df['대표상품_브랜드'] = None
+
+    # 자동으로는 못 잡거나 부정확한, 잘 알려진 회사들은 실제 브랜드명으로 덮어씀
+    # (DART 등록명에 "(유)", "(주)" 등 접미사가 붙어있을 수 있어 완전일치 대신 포함 여부로 매칭)
+    def _apply_override(company_name):
+        for key, brands in BRAND_OVERRIDES.items():
+            if key in company_name:
+                return brands
+        return None
+
+    _override_series = df['회사명'].apply(_apply_override)
+    df['대표상품_브랜드'] = _override_series.combine_first(df['대표상품_브랜드'])
+
     return df
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def load_kind_key_products():
+    """KRX KIND 상장법인목록에서 '주요제품' 텍스트만 가져온다 (상장사 대상, 브랜드명이 섞여 있는 경우가 많음)."""
+    kind_url = "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13"
+    s = make_session(total=3, backoff_factor=1.0)
+    resp = s.get(kind_url, timeout=(20, 20))
+    resp.raise_for_status()
+    resp.encoding = 'euc-kr'
+    kdf = pd.read_html(io.StringIO(resp.text), header=0)[0]
+    kdf['종목코드'] = kdf['종목코드'].astype(str).str.zfill(6)
+    kdf = kdf.rename(columns={'주요제품': '대표상품_브랜드'})
+    return kdf[['종목코드', '대표상품_브랜드']]
+
+
+# 자동으로 못 잡거나 부정확한 유명 회사들의 실제 브랜드명 (회사명: '브랜드1, 브랜드2, ...')
+# 회사명은 DART 등록명과 정확히 일치해야 적용됨 (상장/비상장 상관없이 전체 적용)
+BRAND_OVERRIDES = {
+    '에이피알': '메디큐브, 에이프릴스킨, 포맨트, 에이지알',
+    'LG생활건강': '후, 오휘, 숨, 빌리프, 엘라스틴, 페리오, 샤프란, 테크',
+    '애경산업': "Age 20's, 루나, 트리오, 2080치약, 순샘, 케라시스",
+    '아모레퍼시픽': '설화수, 헤라, 라네즈, 마몽드, 이니스프리, 에뛰드',
+    '유한킴벌리': '하기스, 크리넥스, 좋은느낌, 스카트',
+    '한국피앤지판매': '페브리즈, 오랄비, 팬틴, 헤드앤숄더, 다우니, 질레트',
+    '로레알코리아': '랑콤, 키엘, 로레알파리, 메이블린뉴욕, 라로슈포제',
+    '유니레버코리아': '도브, 바세린, 폰즈, 럭스',
+    '유한크로락스': '유한락스, 유한젠, 유한 펑크린',
+    '옥시레킷벤키저': '옥시크린, 물먹는하마, 데톨, 피니시',
+    '한국인삼공사': '정관장, 홍삼정, 에브리타임, 화애락',
+    '종근당건강': '락토핏, 아임비타, 아이클리어',
+    'CJ웰케어': '바이오코어(유산균), BYO',
+    'hy': '헬리코박터 프로젝트 윌, 메치니코프, 하루야채',
+    'SK매직': '정수기, 공기청정기, 전기레인지, 매직쿡',
+    '쿠쿠전자': '쿠쿠 IH압력밥솥, 전기보온밥솥',
+    '청호나이스': '얼음정수기, 공기청정기, 비데, 연수기',
+    '다이슨코리아': '무선청소기, 헤어드라이어(에어랩), 공기청정기',
+    '필립스코리아': '에어프라이어, 전동칫솔(소닉케어), 헤어케어 가전',
+    '세라젬': '팔콘, 퀀텀, 파라오로보 (안마의자/안마베드)',
+    '바디프랜드': '팬텀로보, 파라오, 로보워킹 (안마의자)',
+    '오텍캐리어': '캐리어에어컨',
+    '콜러노비타': '노비타, 필다임 (비데, 가습기, 전기밥솥)',
+    '해피콜': '다이아몬드 프라이팬, IH진공냄비',
+}
 
 
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
@@ -612,9 +674,10 @@ if run_btn:
     output_df['기업정보(bizno)'] = final['사업자등록번호'].apply(bizno_url)
 
     output_df['대분류'] = final['대분류']
+    output_df['대표상품/브랜드'] = final['대표상품_브랜드']
 
-    output_df = output_df[['회사명', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종', '법인구분',
-                            '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
+    output_df = output_df[['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종',
+                            '법인구분', '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
                             '설립연도', '본사 위치']]
 
     if fetch_titles:
