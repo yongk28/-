@@ -387,41 +387,71 @@ NEGATIVE_WORDS = [
 ]
 
 
-def get_kakao_analysis(session, rest_api_key, company_name, months=6, max_titles_shown=5):
-    """카카오(다음) 웹문서 검색 API로 최근 문서를 가져와서
+ECONOMIC_PRESS_DOMAINS = {
+    "매일경제": "mk.co.kr",
+    "한국경제": "hankyung.com",
+    "서울경제": "sedaily.com",
+    "머니투데이": "mt.co.kr",
+    "이데일리": "edaily.co.kr",
+    "파이낸셜뉴스": "fnnews.com",
+    "헤럴드경제": "heraldcorp.com",
+    "아시아경제": "asiae.co.kr",
+    "아주경제": "ajunews.com",
+    "이투데이": "etoday.co.kr",
+}
+
+
+def get_naver_news_analysis(session, client_id, client_secret, company_name, months=6, max_titles_shown=5):
+    """NAVER API HUB의 뉴스 검색 API로 최근 기사를 가져와서
     1) 최근 제목 몇 개 (참고용, 사람이 직접 판단)
-    2) 최근 N개월 이내 문서 제목에 긍정/부정 단어가 몇 개 나오는지 세는 단순 방식의 5단계 분류
-    를 함께 반환한다. 정교한 감성분석이 아니라 참고용 신호일 뿐임."""
-    url = "https://dapi.kakao.com/v2/search/web"
-    headers = {"Authorization": f"KakaoAK {rest_api_key}"}
-    params = {"query": company_name, "sort": "recency", "size": 50}
+    2) 최근 N개월 이내 기사 제목에 긍정/부정 단어가 몇 개 나오는지 세는 단순 방식의 5단계 분류
+    3) 그 안에 주요 경제지(매일경제/한국경제/서울경제 등 10개) 도메인 기사가 있는지 확인
+    을 함께 반환한다. 정교한 감성분석이 아니라 참고용 신호일 뿐임."""
+    url = "https://naverapihub.apigw.ntruss.com/search/v1/news"
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": client_id,
+        "X-NCP-APIGW-API-KEY": client_secret,
+    }
+    params = {"query": company_name, "display": 30, "start": 1, "sort": "date", "format": "json"}
     try:
         RATE_LIMITER.wait()
         r = session.get(url, headers=headers, params=params, timeout=(15, 15))
         if r.status_code != 200:
-            err = f"카카오 API 오류: {r.status_code}"
-            return err, err
+            err = f"NAVER API 오류: {r.status_code}"
+            return err, err, err
         data = r.json()
-        docs = data.get('documents', [])
-        if not docs:
-            return '검색 결과 없음', '검색 결과 없음'
+        items = data.get('items', [])
+        if not items:
+            return '검색 결과 없음', '검색 결과 없음', '검색 결과 없음'
 
-        titles_all = [re.sub('<[^<]+?>', '', d.get('title', '')) for d in docs]
+        titles_all = [re.sub('<[^<]+?>', '', it.get('title', '')) for it in items]
         titles_preview = ' / '.join(titles_all[:max_titles_shown])
 
         cutoff = pd.Timestamp.now(tz='Asia/Seoul') - pd.DateOffset(months=months)
-        recent_titles = []
-        for d in docs:
+        recent_items = []
+        for it in items:
             try:
-                dt = pd.to_datetime(d.get('datetime'))
+                dt = pd.to_datetime(it.get('pubDate'))
+                if dt.tzinfo is None:
+                    dt = dt.tz_localize('Asia/Seoul')
                 if dt >= cutoff:
-                    recent_titles.append(re.sub('<[^<]+?>', '', d.get('title', '')))
+                    recent_items.append(it)
             except Exception:
                 continue
 
-        if not recent_titles:
-            return titles_preview, f'최근 {months}개월 내 기사 없음'
+        # 경제지 보도 확인 - 원문 링크(originallink) 도메인 기준
+        press_hits = []
+        for press_name, domain in ECONOMIC_PRESS_DOMAINS.items():
+            for it in recent_items:
+                if domain in it.get('originallink', '') or domain in it.get('link', ''):
+                    press_hits.append(press_name)
+                    break
+        press_result = ", ".join(press_hits) + " 보도 확인" if press_hits else "확인 안됨"
 
+        if not recent_items:
+            return titles_preview, f'최근 {months}개월 내 기사 없음', press_result
+
+        recent_titles = [re.sub('<[^<]+?>', '', it.get('title', '')) for it in recent_items]
         pos = neg = 0
         for title in recent_titles:
             for w in POSITIVE_WORDS:
@@ -441,10 +471,10 @@ def get_kakao_analysis(session, rest_api_key, company_name, months=6, max_titles
             label = '부정'
         else:
             label = '매우 부정'
-        return titles_preview, label
+        return titles_preview, label, press_result
     except Exception as e:
         err = f"연결 오류: {e}"
-        return err, err
+        return err, err, err
 
 
 def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
@@ -663,16 +693,27 @@ with st.sidebar:
         max_workers = st.number_input("동시 요청 수", 1, 30, 10)
 
     st.markdown("---")
-    st.header("📰 최근 소식 (선택, 참고용)")
+    st.header("📰 최근 뉴스 (선택, 참고용)")
     st.caption(
-        "최근 검색되는 제목 몇 개를 보여주고, 최근 6개월 기사 제목에 긍정/부정 단어가 "
+        "NAVER API HUB의 뉴스 검색 API로 최근 기사 제목을 보여주고, 최근 6개월 기사 제목에 긍정/부정 단어가 "
         "얼마나 나오는지 세서 5단계(매우긍정~매우부정)로도 표시합니다. 정교한 분석이 아니라 참고용입니다."
     )
-    fetch_titles = st.checkbox("최근 소식 제목 + 여론 확인하기 (카카오 REST API 키 필요)", value=False)
-    kakao_rest_key = ""
+    fetch_titles = st.checkbox("최근 뉴스 제목 + 여론 확인하기 (NAVER API HUB 키 필요)", value=False)
+    naver_client_id = ""
+    naver_client_secret = ""
     if fetch_titles:
-        kakao_rest_key = st.text_input("카카오 REST API 키", type="password")
-        st.caption("developers.kakao.com 에서 무료로 발급받을 수 있습니다.")
+        try:
+            _secret_id = st.secrets.get("NAVER_CLIENT_ID", "")
+            _secret_secret = st.secrets.get("NAVER_CLIENT_SECRET", "")
+        except Exception:
+            _secret_id, _secret_secret = "", ""
+        if _secret_id and _secret_secret:
+            naver_client_id, naver_client_secret = _secret_id, _secret_secret
+            st.caption("✅ 저장된 NAVER API 키를 사용합니다 (Secrets에 등록됨)")
+        else:
+            naver_client_id = st.text_input("NAVER API HUB Client ID")
+            naver_client_secret = st.text_input("NAVER API HUB Client Secret", type="password")
+            st.caption("ncloud.com → NAVER API HUB → 뉴스 검색 API 신청 후 발급받을 수 있습니다.")
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
@@ -828,34 +869,39 @@ if run_btn:
                             '설립연도', '본사 위치']]
 
     if fetch_titles:
-        if not kakao_rest_key:
-            st.warning("최근 소식을 켜셨다면 카카오 REST API 키를 입력해주세요. (이 항목은 건너뜁니다)")
+        if not naver_client_id or not naver_client_secret:
+            st.warning("최근 뉴스를 켜셨다면 NAVER API HUB Client ID/Secret을 입력해주세요. (이 항목은 건너뜁니다)")
         else:
             titles_session = make_session(total=2, backoff_factor=0.5)
-            progress5 = st.progress(0.0, text="최근 소식 조회 중...")
+            progress5 = st.progress(0.0, text="최근 뉴스 조회 중...")
             names = output_df['회사명'].tolist()
             title_results = [None] * len(names)
             sentiment_results = [None] * len(names)
+            press_results = [None] * len(names)
             executor5 = ThreadPoolExecutor(max_workers=10)
             try:
                 future_map = {
-                    executor5.submit(get_kakao_analysis, titles_session, kakao_rest_key, nm): i
+                    executor5.submit(
+                        get_naver_news_analysis, titles_session, naver_client_id, naver_client_secret, nm
+                    ): i
                     for i, nm in enumerate(names)
                 }
                 done = 0
                 for fut in as_completed(future_map):
                     idx = future_map[fut]
-                    titles_preview, sentiment_label = fut.result()
+                    titles_preview, sentiment_label, press_result = fut.result()
                     title_results[idx] = titles_preview
                     sentiment_results[idx] = sentiment_label
+                    press_results[idx] = press_result
                     done += 1
-                    progress5.progress(done / len(names), text=f"최근 소식 조회 중... ({done}/{len(names)})")
+                    progress5.progress(done / len(names), text=f"최근 뉴스 조회 중... ({done}/{len(names)})")
             finally:
                 executor5.shutdown(wait=False, cancel_futures=True)
             progress5.empty()
 
-            output_df['최근 소식 제목(참고용)'] = title_results
+            output_df['최근 뉴스 제목(참고용)'] = title_results
             output_df['뉴스여론(최근6개월, 참고용)'] = sentiment_results
+            output_df['경제지 보도(10개 매체)'] = press_results
 
     # 결과를 세션에 저장해둬야, 결과표에서 행을 선택해서 다시 그려질 때도(run_btn=False인 순간에도)
     # 아래 표시 블록이 이 결과를 계속 보여줄 수 있음
