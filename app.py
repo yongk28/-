@@ -964,7 +964,9 @@ if "last_output_df" in st.session_state:
         hide_index=True,
         disabled=[c for c in editor_df.columns if c != '선택'],
         column_config={
-            "선택": st.column_config.CheckboxColumn("선택"),
+            "선택": st.column_config.CheckboxColumn("선택", pinned=True),
+            "회사명": st.column_config.TextColumn("회사명", pinned=True),
+            "대표상품/브랜드": st.column_config.TextColumn("대표상품/브랜드", width="small"),
             "홈페이지 주소": st.column_config.LinkColumn("홈페이지 주소", display_text="바로가기"),
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
