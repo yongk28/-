@@ -410,26 +410,6 @@ ECONOMIC_PRESS_DOMAINS = {
 }
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 30)
-def get_estimated_homepage(rest_api_key: str, company_name: str):
-    """카카오 웹문서 검색으로 홈페이지 주소를 추정한다. 회사명당 결과를 30일간 캐시해서
-    같은 회사가 다른 검색에 또 나와도 API를 다시 부르지 않는다. 어디까지나 추정치임."""
-    session = make_session(total=1, backoff_factor=0.3)
-    url = "https://dapi.kakao.com/v2/search/web"
-    headers = {"Authorization": f"KakaoAK {rest_api_key}"}
-    params = {"query": f"{company_name} 공식 홈페이지", "size": 1}
-    try:
-        RATE_LIMITER.wait()
-        r = session.get(url, headers=headers, params=params, timeout=(15, 15))
-        if r.status_code != 200:
-            return None
-        docs = r.json().get('documents', [])
-        if not docs:
-            return None
-        return docs[0].get('url')
-    except Exception:
-        return None
-
 
 def get_naver_news_analysis(session, client_id, client_secret, company_name, months=6, max_titles_shown=5):
     """NAVER API HUB의 뉴스 검색 API로 최근 기사를 가져와서
@@ -748,27 +728,6 @@ with st.sidebar:
             naver_client_secret = st.text_input("NAVER API HUB Client Secret", type="password")
             st.caption("ncloud.com → NAVER API HUB → 뉴스 검색 API 신청 후 발급받을 수 있습니다.")
 
-    st.markdown("---")
-    st.header("🔍 홈페이지 추정 채우기 (선택)")
-    st.caption(
-        "DART에 홈페이지가 등록 안 된 회사만 대상으로 검색해서 추정치를 채웁니다. "
-        "확인된 정보가 아니라 '추정'이니 참고용으로만 봐주세요. 회사별 결과는 30일간 캐시되어, "
-        "같은 회사가 다른 검색에 다시 나오면 API를 다시 부르지 않습니다."
-    )
-    fetch_homepage_guess = st.checkbox("홈페이지 없는 회사만 추정치 채우기 (카카오 REST API 키 필요)", value=True)
-    kakao_rest_key = ""
-    if fetch_homepage_guess:
-        try:
-            _secret_kakao = st.secrets.get("KAKAO_REST_API_KEY", "")
-        except Exception:
-            _secret_kakao = ""
-        if _secret_kakao:
-            kakao_rest_key = _secret_kakao
-            st.caption("✅ 저장된 카카오 API 키를 사용합니다 (Secrets에 등록됨)")
-        else:
-            kakao_rest_key = st.text_input("카카오 REST API 키", type="password")
-            st.caption("developers.kakao.com → 애플리케이션 추가 → 앱 키에서 REST API 키를 발급받을 수 있습니다.")
-
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
 
@@ -968,33 +927,6 @@ if run_btn:
 
             output_df['뉴스여론'] = sentiment_results
             output_df['경제지 보도(10개 매체)'] = press_results
-
-    if fetch_homepage_guess:
-        if not kakao_rest_key:
-            st.warning("홈페이지 없는 회사를 채우려면 카카오 REST API 키를 입력해주세요. (이 항목은 건너뜁니다)")
-        else:
-            missing_mask = output_df['홈페이지 주소'].isna() | (output_df['홈페이지 주소'].astype(str).str.strip() == '')
-            missing_names = output_df.loc[missing_mask, '회사명'].tolist()
-            if missing_names:
-                progress6 = st.progress(0.0, text="홈페이지 조회 중...")
-                guess_results = {}
-                executor6 = ThreadPoolExecutor(max_workers=10)
-                try:
-                    future_map = {
-                        executor6.submit(get_estimated_homepage, kakao_rest_key, nm): nm
-                        for nm in missing_names
-                    }
-                    done = 0
-                    for fut in as_completed(future_map):
-                        nm = future_map[fut]
-                        guess_results[nm] = fut.result()
-                        done += 1
-                        progress6.progress(done / len(missing_names), text=f"홈페이지 조회 중... ({done}/{len(missing_names)})")
-                finally:
-                    executor6.shutdown(wait=False, cancel_futures=True)
-                progress6.empty()
-
-                output_df.loc[missing_mask, '홈페이지 주소'] = output_df.loc[missing_mask, '회사명'].map(guess_results)
 
     # 최종 컬럼 순서 정리 (조건부로 추가된 뉴스 관련 컬럼들도 포함해서 한 번에 재배열)
     _desired_order = [
