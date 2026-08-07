@@ -93,6 +93,19 @@ def simplify_address(addr: str) -> str:
     return sido
 
 
+def _normalize_company_name(name):
+    """법인 표기((주), 주식회사, (유), 유한회사)만 떼어낸 순수 회사명.
+    검색 API 질의어나 브랜드명 매칭 등, 정식 법인명이 오히려 방해되는 경우에 사용."""
+    if not isinstance(name, str):
+        return ''
+    name = name.strip()
+    name = re.sub(r'^\(주\)|\(주\)$|^㈜|㈜$', '', name).strip()
+    name = re.sub(r'^주식회사\s*|\s*주식회사$', '', name).strip()
+    name = re.sub(r'^\(유\)|\(유\)$', '', name).strip()
+    name = re.sub(r'^유한회사\s*|\s*유한회사$', '', name).strip()
+    return name
+
+
 def _download_bytes(session, url, timeout=(20, 60), attempts=3, max_total_seconds=120):
     """용량이 큰 파일도 안정적으로 받기 위해 스트리밍 + 재시도로 다운로드.
     응답이 아주 느리게(찔끔찔끔) 들어오면 개별 read는 타임아웃에 안 걸려도
@@ -228,16 +241,6 @@ def load_dart_full_registry():
 
     # 자동으로는 못 잡거나 부정확한, 잘 알려진 회사들은 실제 브랜드명으로 덮어씀
     # (법인 표기(주/유 등)만 떼어내고, 그 나머지가 완전히 일치할 때만 적용 -> 짧은 이름의 오매칭 방지)
-    def _normalize_company_name(name):
-        if not isinstance(name, str):
-            return ''
-        name = name.strip()
-        name = re.sub(r'^\(주\)|\(주\)$|^㈜|㈜$', '', name).strip()
-        name = re.sub(r'^주식회사\s*|\s*주식회사$', '', name).strip()
-        name = re.sub(r'^\(유\)|\(유\)$', '', name).strip()
-        name = re.sub(r'^유한회사\s*|\s*유한회사$', '', name).strip()
-        return name
-
     _normalized_names = df['회사명'].apply(_normalize_company_name)
     _override_series = _normalized_names.map(BRAND_OVERRIDES)
     df['대표상품_브랜드'] = _override_series.combine_first(df['대표상품_브랜드'])
@@ -852,7 +855,7 @@ if run_btn:
         '업종명': '업종', '홈페이지': '홈페이지 주소', '본사_위치': '본사 위치',
     })
     output_df['관련기사'] = output_df['회사명'].apply(
-        lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(str(name))}"
+        lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(_normalize_company_name(str(name)) or str(name))}"
     )
 
     def bizno_url(brno):
@@ -875,6 +878,7 @@ if run_btn:
             titles_session = make_session(total=2, backoff_factor=0.5)
             progress5 = st.progress(0.0, text="최근 뉴스 조회 중...")
             names = output_df['회사명'].tolist()
+            search_names = [_normalize_company_name(nm) or nm for nm in names]
             title_results = [None] * len(names)
             sentiment_results = [None] * len(names)
             press_results = [None] * len(names)
@@ -882,9 +886,9 @@ if run_btn:
             try:
                 future_map = {
                     executor5.submit(
-                        get_naver_news_analysis, titles_session, naver_client_id, naver_client_secret, nm
+                        get_naver_news_analysis, titles_session, naver_client_id, naver_client_secret, sn
                     ): i
-                    for i, nm in enumerate(names)
+                    for i, sn in enumerate(search_names)
                 }
                 done = 0
                 for fut in as_completed(future_map):
