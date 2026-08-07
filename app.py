@@ -224,6 +224,12 @@ def load_dart_full_registry():
     df.loc[df['종목코드'] == '', '종목코드'] = None
     df['회사명'] = df['회사이름'].astype(str).str.strip()
     df['본사_위치'] = df['주소'].apply(simplify_address)
+    df['법인구분'] = df['법인구분'].replace({
+        '유가증권시장': '코스피',
+        '코스닥시장': '코스닥',
+        '코넥스시장': '코넥스',
+        '기타법인': '비상장',
+    })
 
     def _year(x):
         try:
@@ -655,7 +661,7 @@ with st.sidebar:
     )
     corp_type_filter = st.multiselect(
         "법인구분", options=corp_type_options, default=[],
-        help="유가증권시장/코스닥시장/코넥스시장 = 상장사, 기타법인 = 비상장(외감대상)",
+        help="코스피/코스닥/코넥스 = 상장사, 비상장 = 외감대상 비상장법인",
         key="corp_type_filter_input",
     )
     region_filter = st.text_input("본사 지역 (예: 서울)", "", key="region_filter_input")
@@ -815,7 +821,7 @@ if run_btn:
         listed = final[final['종목코드'].notna()].copy()
         unlisted_count = len(final) - len(listed)
         if unlisted_count > 0:
-            st.caption(f"비상장(기타법인) {unlisted_count}개사는 매출 조회 대상이 아니라 매출 없이 표시됩니다.")
+            st.caption(f"비상장 {unlisted_count}개사는 매출 조회 대상이 아니라 매출 없이 표시됩니다.")
 
         session = make_session(total=2, backoff_factor=0.5)
         progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
