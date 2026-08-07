@@ -915,14 +915,13 @@ if run_btn:
                 executor5.shutdown(wait=False, cancel_futures=True)
             progress5.empty()
 
-            output_df['최근 뉴스 제목(참고용)'] = title_results
             output_df['뉴스여론(최근6개월, 참고용)'] = sentiment_results
             output_df['경제지 보도(10개 매체)'] = press_results
 
     # 최종 컬럼 순서 정리 (조건부로 추가된 뉴스 관련 컬럼들도 포함해서 한 번에 재배열)
     _desired_order = [
         '회사명', '대표상품/브랜드', '기업정보(bizno)', '관련기사', '홈페이지 주소',
-        '뉴스여론(최근6개월, 참고용)', '경제지 보도(10개 매체)', '최근 뉴스 제목(참고용)',
+        '뉴스여론(최근6개월, 참고용)', '경제지 보도(10개 매체)',
         '대분류', '업종', '법인구분', '대표자명',
         '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '설립연도', '본사 위치',
     ]
