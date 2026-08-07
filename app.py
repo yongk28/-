@@ -743,6 +743,18 @@ if run_btn:
     kw_list = [k.strip() for k in industry_keywords.split(',') if k.strip()]
     name_list = [n.strip() for n in company_name_search.split(',') if n.strip()]
 
+    has_any_filter = any([
+        name_list, kw_list, industry_select, daebunryu_select, jungbunryu_select, sobunryu_select,
+        ceo_name_search.strip(), corp_type_filter, region_filter.strip(), min_founding_year > 0,
+    ])
+    if not has_any_filter:
+        st.warning(
+            "필터 조건이 하나도 없어서 검색을 진행하지 않았습니다. "
+            "업종/회사명/대표자명/지역 등 최소 하나는 입력해주세요. "
+            "(조건 없이 검색하면 전체 11만여 개 회사를 대상으로 돌아 매우 오래 걸립니다)"
+        )
+        st.stop()
+
     if name_list:
         pattern = '|'.join(re.escape(n) for n in name_list)
         candidates = candidates[candidates['회사명'].str.contains(pattern, na=False)]
@@ -906,6 +918,17 @@ if run_btn:
             output_df['최근 뉴스 제목(참고용)'] = title_results
             output_df['뉴스여론(최근6개월, 참고용)'] = sentiment_results
             output_df['경제지 보도(10개 매체)'] = press_results
+
+    # 최종 컬럼 순서 정리 (조건부로 추가된 뉴스 관련 컬럼들도 포함해서 한 번에 재배열)
+    _desired_order = [
+        '회사명', '대표상품/브랜드', '기업정보(bizno)', '관련기사', '홈페이지 주소',
+        '뉴스여론(최근6개월, 참고용)', '경제지 보도(10개 매체)', '최근 뉴스 제목(참고용)',
+        '대분류', '업종', '법인구분', '대표자명',
+        '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '설립연도', '본사 위치',
+    ]
+    _final_order = [c for c in _desired_order if c in output_df.columns]
+    _final_order += [c for c in output_df.columns if c not in _final_order]
+    output_df = output_df[_final_order]
 
     # 결과를 세션에 저장해둬야, 결과표에서 행을 선택해서 다시 그려질 때도(run_btn=False인 순간에도)
     # 아래 표시 블록이 이 결과를 계속 보여줄 수 있음
