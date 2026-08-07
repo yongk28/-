@@ -446,7 +446,8 @@ def get_naver_news_analysis(session, client_id, client_secret, company_name, mon
         press_hits = []
         for press_name, domain in ECONOMIC_PRESS_DOMAINS.items():
             for it in recent_items:
-                if domain in it.get('originallink', '') or domain in it.get('link', ''):
+                link = it.get('originallink') or it.get('link', '')
+                if domain in link:
                     press_hits.append(press_name)
                     break
         press_result = ", ".join(press_hits) + " 보도 확인" if press_hits else "확인 안됨"
@@ -664,7 +665,8 @@ with st.sidebar:
     top_n = st.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
     st.markdown("---")
-    st.header("💰 매출 조회 (선택, 상장사만 가능)")
+    st.header("💰 매출조회 (상장사만 가능)")
+    st.caption("매출 / 영업이익 / 당기순이익이 표시됩니다.")
     fetch_revenue = st.checkbox("매출/영업이익/순이익도 같이 조회하기 (API 키 필요, 상장사만 해당)", value=False)
     api_key = ""
     bsns_year = "2025"
@@ -696,10 +698,11 @@ with st.sidebar:
         max_workers = st.number_input("동시 요청 수", 1, 30, 10)
 
     st.markdown("---")
-    st.header("📰 최근 뉴스 (선택, 참고용)")
+    st.header("📰 최근뉴스 (참고용)")
     st.caption(
-        "NAVER API HUB의 뉴스 검색 API로 최근 기사 제목을 보여주고, 최근 6개월 기사 제목에 긍정/부정 단어가 "
-        "얼마나 나오는지 세서 5단계(매우긍정~매우부정)로도 표시합니다. 정교한 분석이 아니라 참고용입니다."
+        "네이버에 최근 6개월간 해당 기업 보도 뉴스를 보여주고, 제목 키워드를 분석하여 "
+        "여론을 5단계(매우긍정~매우부정)로 표시합니다. "
+        "한경, 매경 등 10개 경제지 매체에 보도여부를 나타냅니다."
     )
     fetch_titles = st.checkbox("최근 뉴스 제목 + 여론 확인하기 (NAVER API HUB 키 필요)", value=False)
     naver_client_id = ""
