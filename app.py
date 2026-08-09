@@ -26,6 +26,18 @@ import streamlit as st
 
 st.set_page_config(page_title="기업 스크리너", layout="wide")
 
+st.markdown("""
+<style>
+[data-testid="stCheckbox"] label span[data-baseweb="checkbox"] {
+    transform: scale(1.5);
+    margin-right: 10px;
+}
+[data-testid="stCheckbox"] label span[data-baseweb="checkbox"] > div {
+    border: 2px solid #555 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 class RateLimiter:
     """OpenDART가 초당 요청 수를 제한할 가능성에 대비해, 전체 스레드가 공유하는
@@ -616,6 +628,9 @@ if st.session_state.get("pending_reset_filters", False):
 
 show_results = "last_output_df" in st.session_state
 
+if not show_results:
+    st.info("아래의 필터 조건을 입력하고 '검색 실행' 버튼을 누르세요.")
+
 if show_results:
     # 검색 결과가 있으면 필터는 사이드바로 (결과 화면을 넓게 쓰기 위해)
     header_area = st.sidebar
@@ -625,13 +640,13 @@ else:
     header_area = st.container(border=True)
 
 with header_area:
-    st.header("🔎 필터 조건")
-    st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
-
-    if st.button("🔄 필터 초기화", use_container_width=True):
+    _title_col, _reset_col = st.columns([5, 1])
+    _title_col.header("🔎 필터 조건")
+    if _reset_col.button("🔄 필터 초기화"):
         st.session_state["pending_reset_filters"] = True
         st.session_state.pop("last_output_df", None)
         st.rerun()
+    st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
 
     if not show_results:
         col_a, col_b, col_c = st.columns(3)
@@ -1063,5 +1078,3 @@ if "last_output_df" in st.session_state:
         file_name="screener_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-elif not run_btn:
-    st.info("왼쪽에서 조건을 입력하고 '검색 실행' 버튼을 누르세요.")
