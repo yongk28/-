@@ -28,12 +28,9 @@ st.set_page_config(page_title="기업 스크리너", layout="wide")
 
 st.markdown("""
 <style>
-[data-testid="stCheckbox"] label span[data-baseweb="checkbox"] {
-    transform: scale(1.5);
-    margin-right: 10px;
-}
-[data-testid="stCheckbox"] label span[data-baseweb="checkbox"] > div {
-    border: 2px solid #555 !important;
+[data-testid="stCheckbox"] {
+    transform: scale(1.8);
+    transform-origin: left center;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -640,12 +637,22 @@ else:
     header_area = st.container(border=True)
 
 with header_area:
-    _title_col, _reset_col = st.columns([5, 1])
-    _title_col.header("🔎 필터 조건")
-    if _reset_col.button("🔄 필터 초기화"):
-        st.session_state["pending_reset_filters"] = True
-        st.session_state.pop("last_output_df", None)
-        st.rerun()
+    if show_results:
+        # 검색 후(사이드바)에서는 기존처럼 단순한 스타일 유지
+        st.header("🔎 필터 조건")
+        if st.button("🔄 필터 초기화", use_container_width=True):
+            st.session_state["pending_reset_filters"] = True
+            st.session_state.pop("last_output_df", None)
+            st.rerun()
+    else:
+        # 검색 전(메인 3열 화면)에서만 버튼을 크게, 우측 상단에 배치
+        _title_col, _reset_col = st.columns([4, 2])
+        _title_col.header("🔎 필터 조건")
+        _reset_col.write("")  # 헤더 텍스트와 세로 위치를 맞추기 위한 여백
+        if _reset_col.button("🔄 필터 초기화", use_container_width=True, type="primary"):
+            st.session_state["pending_reset_filters"] = True
+            st.session_state.pop("last_output_df", None)
+            st.rerun()
     st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
 
     if not show_results:
