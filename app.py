@@ -47,16 +47,12 @@ h1 {
     padding-top: 0.2rem !important;
 }
 
-/* 필터 조건 카드: 박스 전체를 띄우는 대신, 테두리 선 자체에만 은은한 입체감(베벨) 부여 */
-[data-testid="stVerticalBlockBorderWrapper"] {
+/* 필터 조건 카드: 테두리를 따라 확실하게 보이는 그림자로 입체감 부여
+   (key="filter_box"로 생성되는 .st-key-filter_box 클래스 사용 - 공식 문서에서 권장하는 방식) */
+.st-key-filter_box {
     border-radius: 16px !important;
     border-top: 4px solid #1E3A5F !important;
-    border-left: 1px solid rgba(30, 41, 59, 0.18) !important;
-    border-right: 1px solid rgba(30, 41, 59, 0.22) !important;
-    border-bottom: 1px solid rgba(30, 41, 59, 0.25) !important;
-    box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.9),
-        0 1px 2px rgba(30, 41, 59, 0.10) !important;
+    box-shadow: 0 4px 14px rgba(30, 41, 59, 0.35) !important;
     background: #FFFFFF !important;
 }
 
@@ -705,7 +701,7 @@ if show_results:
     col_a = col_b = col_c = st.sidebar
 else:
     # 처음 켰을 때(검색 전)는 필터를 메인 화면에 3열로 넓게 배치
-    header_area = st.container(border=True)
+    header_area = st.container(border=True, key="filter_box")
 
 with header_area:
     if show_results:
