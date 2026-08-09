@@ -969,9 +969,13 @@ if run_btn:
     output_df['대분류'] = final['대분류']
     output_df['대표상품/브랜드'] = final['대표상품_브랜드']
 
-    output_df = output_df[['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종',
-                            '법인구분', '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
-                            '설립연도', '본사 위치']]
+    _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종',
+                  '법인구분', '대표자명', '설립연도', '본사 위치']
+    if fetch_revenue:
+        _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종',
+                      '법인구분', '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
+                      '설립연도', '본사 위치']
+    output_df = output_df[_base_cols]
 
     if fetch_titles:
         if not naver_client_id or not naver_client_secret:
@@ -1044,15 +1048,13 @@ if "last_output_df" in st.session_state:
 
     display_df = output_df.copy()
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
-        display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
-    sel_col1, sel_col2, _ = st.columns([1, 1, 6])
-    if sel_col1.button("☑️ 전체 선택", use_container_width=True):
-        st.session_state["_select_all_value"] = True
-        st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
-        st.rerun()
-    if sel_col2.button("⬜ 전체 해제", use_container_width=True):
-        st.session_state["_select_all_value"] = False
+    _prev_toggle = st.session_state.get("_select_all_value", False)
+    select_all_toggle = st.toggle("전체 선택 / 전체 해제", value=_prev_toggle)
+    if select_all_toggle != _prev_toggle:
+        st.session_state["_select_all_value"] = select_all_toggle
         st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
         st.rerun()
 
