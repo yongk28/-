@@ -63,29 +63,6 @@ h1 {
         0 6px 16px rgba(30, 41, 59, 0.08) !important;
 }
 
-/* 입력창/드롭다운: 모서리를 부드럽게 + 은은한 그림자로 살짝 떠 보이는 입체감 + 높이 통일
-   (raw input 태그가 아니라 바깥 박스(data-baseweb)에만 스타일을 줘야 기존 테두리와 안 겹침) */
-[data-baseweb="select"] > div,
-[data-baseweb="base-input"] {
-    border-radius: 8px !important;
-    box-shadow: 0 1px 2px rgba(30, 58, 95, 0.06), 0 2px 6px rgba(30, 58, 95, 0.07) !important;
-    border: 1px solid rgba(30, 58, 95, 0.10) !important;
-    transition: box-shadow 0.15s ease;
-    min-height: 44px !important;
-}
-[data-baseweb="select"] > div:focus-within,
-[data-baseweb="base-input"]:focus-within {
-    box-shadow: 0 2px 8px rgba(30, 58, 95, 0.14) !important;
-    border: 1px solid rgba(184, 134, 63, 0.55) !important;
-}
-
-/* number_input의 +/- 버튼 영역도 같은 톤으로 둥글게 + 높이 통일 */
-[data-testid="stNumberInputContainer"] {
-    border-radius: 8px !important;
-    box-shadow: 0 1px 2px rgba(30, 58, 95, 0.06), 0 2px 6px rgba(30, 58, 95, 0.07) !important;
-    min-height: 44px !important;
-}
-
 /* 각 입력란 위의 라벨 글자: 조금 더 크고 굵게 */
 [data-testid="stWidgetLabel"] p {
     font-size: 16px !important;
