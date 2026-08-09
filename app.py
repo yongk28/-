@@ -32,6 +32,45 @@ st.markdown("""
     transform: scale(1.8);
     transform-origin: left center;
 }
+
+/* 메인 타이틀 - 여백/자간 정리 */
+h1 {
+    letter-spacing: -0.02em;
+    padding-top: 0.2rem !important;
+}
+
+/* 필터 조건 카드: 남색 포인트 라인 + 은은한 그림자로 카드감 부여 */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 14px !important;
+    border-top: 4px solid #1E3A5F !important;
+    box-shadow: 0 2px 10px rgba(30, 41, 59, 0.06);
+}
+
+/* 안내 배너(파란 정보 박스) */
+[data-testid="stAlertContainer"] {
+    border-radius: 10px !important;
+}
+
+/* 입력창/드롭다운 모서리를 부드럽게 */
+[data-baseweb="select"] > div,
+[data-baseweb="base-input"],
+input, textarea {
+    border-radius: 8px !important;
+}
+
+/* 버튼: 모서리를 부드럽게, 호버 시 미세한 그림자 */
+.stButton > button, .stDownloadButton > button {
+    border-radius: 8px !important;
+    transition: box-shadow 0.15s ease, transform 0.05s ease;
+}
+.stButton > button:hover, .stDownloadButton > button:hover {
+    box-shadow: 0 3px 10px rgba(184, 134, 63, 0.28);
+}
+
+/* 결과 요약(성공) 배너의 강조색을 포인트 컬러 톤으로 */
+[data-testid="stAlertContentSuccess"] {
+    color: #1E3A5F;
+}
 </style>
 """, unsafe_allow_html=True)
 
