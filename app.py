@@ -51,8 +51,7 @@ h1 {
    (key="filter_box"로 생성되는 .st-key-filter_box 클래스 사용 - 공식 문서에서 권장하는 방식) */
 .st-key-filter_box {
     border-radius: 16px !important;
-    border-top: 4px solid #1E3A5F !important;
-    box-shadow: 0 4px 14px rgba(30, 41, 59, 0.35) !important;
+    box-shadow: 0 4px 14px rgba(30, 41, 59, 0.16) !important;
     background: #FFFFFF !important;
 }
 
