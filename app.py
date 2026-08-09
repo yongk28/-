@@ -433,7 +433,17 @@ def load_corp_map(api_key: str):
     session = make_session(total=3, backoff_factor=1.5)
     content = _download_bytes(session, url, timeout=(20, 60))
 
-    zf = zipfile.ZipFile(io.BytesIO(content))
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(content))
+    except zipfile.BadZipFile:
+        # zip이 아니면 보통 OpenDART가 보낸 에러 메시지(JSON/텍스트)일 가능성이 높음 - 그대로 보여줌
+        try:
+            preview = content.decode('utf-8', errors='replace')[:500]
+        except Exception:
+            preview = str(content[:200])
+        raise RuntimeError(
+            f"OpenDART가 정상 파일 대신 이런 응답을 보냈습니다 (API 키를 확인해보세요): {preview}"
+        )
     xml_bytes = zf.read(zf.namelist()[0])
     root = ET.fromstring(xml_bytes)
     corp_map = {}
@@ -545,6 +555,164 @@ def get_naver_news_analysis(session, client_id, client_secret, company_name, mon
     except Exception as e:
         err = f"연결 오류: {e}"
         return err, err, err
+
+
+@st.dialog("🔎 검색 처리 중", width="large")
+def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max_workers,
+                               min_rev, max_rev, min_op, max_op, min_ni, max_ni, top_n,
+                               fetch_titles, naver_client_id, naver_client_secret):
+    """검색 버튼을 누른 뒤의 모든 처리(매출조회/최근뉴스 포함)를 화면 가운데 팝업 안에서 진행하고,
+    끝나면 결과를 세션에 저장한 뒤 다시 그림 (선택 옵션과 무관하게 항상 이 팝업을 거침)."""
+    st.write(f"1차 필터 후 후보 기업 수: **{len(candidates)}**")
+
+    final = candidates.copy()
+    final['매출액(억원)'] = None
+    final['영업이익(억원)'] = None
+    final['당기순이익(억원)'] = None
+    final['실패사유'] = None
+    no_data_df = pd.DataFrame()
+
+    if fetch_revenue:
+        st.write("**매출 / 영업이익 / 당기순이익 조회**" + (" (1/2단계)" if fetch_titles else ""))
+        try:
+            corp_map = load_corp_map(api_key)
+        except Exception as e:
+            st.error(f"OpenDART corp_code 매핑을 못 가져왔습니다: {e}")
+            st.session_state["still_running"] = False
+            st.stop()  # 팝업은 열린 채로 두어 에러 메시지를 보여주고, 사용자가 직접 닫게 함
+
+        listed = final[final['종목코드'].notna()].copy()
+        unlisted_count = len(final) - len(listed)
+        if unlisted_count > 0:
+            st.caption(f"비상장 {unlisted_count}개사는 매출 조회 대상이 아니라 매출 없이 표시됩니다.")
+
+        session = make_session(total=2, backoff_factor=0.5)
+        progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
+        results = {}
+        executor = ThreadPoolExecutor(max_workers=int(max_workers))
+        try:
+            future_map = {}
+            for idx, row in listed.iterrows():
+                corp_code = corp_map.get(row['종목코드'])
+                if not corp_code:
+                    continue
+                fut = executor.submit(get_financials, session, api_key, corp_code, bsns_year, "11011")
+                future_map[fut] = idx
+            done = 0
+            for fut in as_completed(future_map):
+                idx = future_map[fut]
+                results[idx] = fut.result()
+                done += 1
+                if len(future_map):
+                    progress.progress(done / len(future_map),
+                                       text=f"매출/영업이익/순이익 조회 중... ({done}/{len(future_map)})")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+        for idx, (revenue, op_profit, net_income, reason) in results.items():
+            final.at[idx, '매출액(억원)'] = (revenue / 1e8) if revenue is not None else None
+            final.at[idx, '영업이익(억원)'] = (op_profit / 1e8) if op_profit is not None else None
+            final.at[idx, '당기순이익(억원)'] = (net_income / 1e8) if net_income is not None else None
+            final.at[idx, '실패사유'] = reason
+
+        no_data_df = final[final['종목코드'].notna() & final['매출액(억원)'].isna()][
+            ['회사명', '종목코드', '실패사유']
+        ].copy()
+
+        for col, mn, mx in [('매출액(억원)', min_rev, max_rev),
+                             ('영업이익(억원)', min_op, max_op),
+                             ('당기순이익(억원)', min_ni, max_ni)]:
+            final[col] = pd.to_numeric(final[col], errors='coerce')
+            final = final[final[col].isna() | ((final[col] >= mn) & (final[col] <= mx))]
+
+    final = final.sort_values(
+        '매출액(억원)', ascending=False, na_position='last'
+    ).head(int(top_n)).reset_index(drop=True)
+    for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
+        final[col] = pd.to_numeric(final[col], errors='coerce').round(0).astype('Int64')
+
+    output_df = final.rename(columns={
+        '업종명': '업종', '홈페이지': '홈페이지 주소', '본사_위치': '본사 위치',
+    })
+    output_df['관련기사'] = output_df['회사명'].apply(
+        lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(_normalize_company_name(str(name)) or str(name))}"
+    )
+
+    def bizno_url(brno):
+        digits = re.sub(r'\D', '', str(brno)) if pd.notna(brno) else ''
+        return f"https://bizno.net/article/{digits}" if len(digits) == 10 else None
+
+    output_df['기업정보(bizno)'] = final['사업자등록번호'].apply(bizno_url)
+
+    def naver_finance_url(stock_code):
+        if pd.isna(stock_code) or not str(stock_code).strip():
+            return None
+        return f"https://finance.naver.com/item/main.naver?code={str(stock_code).strip()}"
+
+    output_df['증권'] = final['종목코드'].apply(naver_finance_url)
+
+    output_df['대분류'] = final['대분류']
+    output_df['대표상품/브랜드'] = final['대표상품_브랜드']
+
+    _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '증권', '홈페이지 주소', '대분류', '업종',
+                  '법인구분', '대표자명', '설립연도', '본사 위치']
+    if fetch_revenue:
+        _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '증권', '홈페이지 주소', '대분류', '업종',
+                      '법인구분', '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
+                      '설립연도', '본사 위치']
+    output_df = output_df[_base_cols]
+
+    if fetch_titles:
+        if not naver_client_id or not naver_client_secret:
+            st.warning("최근 뉴스를 켜셨다면 NAVER API HUB Client ID/Secret을 입력해주세요. (이 항목은 건너뜁니다)")
+        else:
+            st.write("**최근 뉴스 조회**" + (" (2/2단계)" if fetch_revenue else ""))
+            titles_session = make_session(total=2, backoff_factor=0.5)
+            progress2 = st.progress(0.0, text="최근 뉴스 조회 중...")
+            names = output_df['회사명'].tolist()
+            search_names = [_normalize_company_name(nm) or nm for nm in names]
+            title_results = [None] * len(names)
+            sentiment_results = [None] * len(names)
+            press_results = [None] * len(names)
+            executor2 = ThreadPoolExecutor(max_workers=10)
+            try:
+                future_map = {
+                    executor2.submit(
+                        get_naver_news_analysis, titles_session, naver_client_id, naver_client_secret, sn
+                    ): i
+                    for i, sn in enumerate(search_names)
+                }
+                done = 0
+                for fut in as_completed(future_map):
+                    idx = future_map[fut]
+                    titles_preview, sentiment_label, press_result = fut.result()
+                    title_results[idx] = titles_preview
+                    sentiment_results[idx] = sentiment_label
+                    press_results[idx] = press_result
+                    done += 1
+                    progress2.progress(done / len(names), text=f"최근 뉴스 조회 중... ({done}/{len(names)})")
+            finally:
+                executor2.shutdown(wait=False, cancel_futures=True)
+
+            output_df['뉴스여론'] = sentiment_results
+            output_df['경제지 보도(10개 매체)'] = press_results
+
+    _desired_order = [
+        '회사명', '대표상품/브랜드', '기업정보(bizno)', '증권', '홈페이지 주소', '관련기사',
+        '뉴스여론', '경제지 보도(10개 매체)',
+        '대분류', '업종', '법인구분',
+        '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '대표자명', '설립연도', '본사 위치',
+    ]
+    _final_order = [c for c in _desired_order if c in output_df.columns]
+    _final_order += [c for c in output_df.columns if c not in _final_order]
+    output_df = output_df[_final_order]
+
+    st.session_state["last_output_df"] = output_df
+    st.session_state["_no_data_df"] = no_data_df
+    st.session_state["_select_all_value"] = False
+    st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
+    st.session_state["still_running"] = False
+    st.rerun()
 
 
 def get_financials(session, api_key, corp_code, bsns_year, reprt_code):
@@ -888,164 +1056,29 @@ if run_btn:
         candidates = candidates[candidates['본사_위치'].str.contains(region_filter.strip(), na=False)]
 
     candidates = candidates.reset_index(drop=True)
-    st.write(f"1차 필터 후 후보 기업 수: **{len(candidates)}**")
 
     if len(candidates) == 0:
         st.warning("조건에 맞는 후보가 없습니다. 필터를 완화해보세요.")
         st.stop()
 
-    final = candidates.copy()
-    final['매출액(억원)'] = None
-    final['영업이익(억원)'] = None
-    final['당기순이익(억원)'] = None
-    final['실패사유'] = None
-
-    if fetch_revenue:
-        st.session_state["still_running"] = True
-        st.session_state["last_dispatch_ts"] = time.time()
-        try:
-            corp_map = load_corp_map(api_key)
-        except Exception as e:
-            st.error(f"OpenDART corp_code 매핑을 못 가져왔습니다: {e}")
-            st.session_state["still_running"] = False
-            st.stop()
-
-        listed = final[final['종목코드'].notna()].copy()
-        unlisted_count = len(final) - len(listed)
-        if unlisted_count > 0:
-            st.caption(f"비상장 {unlisted_count}개사는 매출 조회 대상이 아니라 매출 없이 표시됩니다.")
-
-        session = make_session(total=2, backoff_factor=0.5)
-        progress = st.progress(0.0, text="매출/영업이익/순이익 조회 중...")
-        results = {}
-        executor = ThreadPoolExecutor(max_workers=int(max_workers))
-        try:
-            future_map = {}
-            for idx, row in listed.iterrows():
-                corp_code = corp_map.get(row['종목코드'])
-                if not corp_code:
-                    continue
-                fut = executor.submit(get_financials, session, api_key, corp_code, bsns_year, "11011")
-                future_map[fut] = idx
-            done = 0
-            for fut in as_completed(future_map):
-                idx = future_map[fut]
-                revenue, op_profit, net_income, reason = fut.result()
-                results[idx] = (revenue, op_profit, net_income, reason)
-                done += 1
-                if len(future_map):
-                    progress.progress(done / len(future_map),
-                                       text=f"매출/영업이익/순이익 조회 중... ({done}/{len(future_map)})")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        progress.empty()
-        st.session_state["still_running"] = False
-
-        for idx, (revenue, op_profit, net_income, reason) in results.items():
-            final.at[idx, '매출액(억원)'] = (revenue / 1e8) if revenue is not None else None
-            final.at[idx, '영업이익(억원)'] = (op_profit / 1e8) if op_profit is not None else None
-            final.at[idx, '당기순이익(억원)'] = (net_income / 1e8) if net_income is not None else None
-            final.at[idx, '실패사유'] = reason
-
-        no_data = final[final['종목코드'].notna() & final['매출액(억원)'].isna()]
-        if not no_data.empty:
-            with st.expander(f"⚠️ 매출 데이터를 못 가져온 상장사 {len(no_data)}개 (클릭해서 보기)"):
-                st.dataframe(no_data[['회사명', '종목코드', '실패사유']], use_container_width=True)
-
-        for col, mn, mx in [('매출액(억원)', min_rev, max_rev),
-                             ('영업이익(억원)', min_op, max_op),
-                             ('당기순이익(억원)', min_ni, max_ni)]:
-            final[col] = pd.to_numeric(final[col], errors='coerce')
-            final = final[final[col].isna() | ((final[col] >= mn) & (final[col] <= mx))]
-
-    final = final.sort_values(
-        '매출액(억원)', ascending=False, na_position='last'
-    ).head(int(top_n)).reset_index(drop=True)
-    for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
-        final[col] = pd.to_numeric(final[col], errors='coerce').round(0).astype('Int64')
-
-    output_df = final.rename(columns={
-        '업종명': '업종', '홈페이지': '홈페이지 주소', '본사_위치': '본사 위치',
-    })
-    output_df['관련기사'] = output_df['회사명'].apply(
-        lambda name: f"https://search.naver.com/search.naver?where=news&query={quote(_normalize_company_name(str(name)) or str(name))}"
+    st.session_state["still_running"] = True
+    st.session_state["last_dispatch_ts"] = time.time()
+    _search_processing_dialog(
+        candidates, fetch_revenue, api_key, bsns_year, max_workers,
+        min_rev, max_rev, min_op, max_op, min_ni, max_ni, top_n,
+        fetch_titles, naver_client_id, naver_client_secret,
     )
-
-    def bizno_url(brno):
-        digits = re.sub(r'\D', '', str(brno)) if pd.notna(brno) else ''
-        return f"https://bizno.net/article/{digits}" if len(digits) == 10 else None
-
-    output_df['기업정보(bizno)'] = final['사업자등록번호'].apply(bizno_url)
-
-    output_df['대분류'] = final['대분류']
-    output_df['대표상품/브랜드'] = final['대표상품_브랜드']
-
-    _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종',
-                  '법인구분', '대표자명', '설립연도', '본사 위치']
-    if fetch_revenue:
-        _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '홈페이지 주소', '대분류', '업종',
-                      '법인구분', '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
-                      '설립연도', '본사 위치']
-    output_df = output_df[_base_cols]
-
-    if fetch_titles:
-        if not naver_client_id or not naver_client_secret:
-            st.warning("최근 뉴스를 켜셨다면 NAVER API HUB Client ID/Secret을 입력해주세요. (이 항목은 건너뜁니다)")
-        else:
-            titles_session = make_session(total=2, backoff_factor=0.5)
-            progress5 = st.progress(0.0, text="최근 뉴스 조회 중...")
-            names = output_df['회사명'].tolist()
-            search_names = [_normalize_company_name(nm) or nm for nm in names]
-            title_results = [None] * len(names)
-            sentiment_results = [None] * len(names)
-            press_results = [None] * len(names)
-            executor5 = ThreadPoolExecutor(max_workers=10)
-            try:
-                future_map = {
-                    executor5.submit(
-                        get_naver_news_analysis, titles_session, naver_client_id, naver_client_secret, sn
-                    ): i
-                    for i, sn in enumerate(search_names)
-                }
-                done = 0
-                for fut in as_completed(future_map):
-                    idx = future_map[fut]
-                    titles_preview, sentiment_label, press_result = fut.result()
-                    title_results[idx] = titles_preview
-                    sentiment_results[idx] = sentiment_label
-                    press_results[idx] = press_result
-                    done += 1
-                    progress5.progress(done / len(names), text=f"최근 뉴스 조회 중... ({done}/{len(names)})")
-            finally:
-                executor5.shutdown(wait=False, cancel_futures=True)
-            progress5.empty()
-
-            output_df['뉴스여론'] = sentiment_results
-            output_df['경제지 보도(10개 매체)'] = press_results
-
-    # 최종 컬럼 순서 정리 (조건부로 추가된 뉴스 관련 컬럼들도 포함해서 한 번에 재배열)
-    _desired_order = [
-        '회사명', '대표상품/브랜드', '기업정보(bizno)', '홈페이지 주소', '관련기사',
-        '뉴스여론', '경제지 보도(10개 매체)',
-        '대분류', '업종', '법인구분',
-        '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '대표자명', '설립연도', '본사 위치',
-    ]
-    _final_order = [c for c in _desired_order if c in output_df.columns]
-    _final_order += [c for c in output_df.columns if c not in _final_order]
-    output_df = output_df[_final_order]
-
-    # 결과를 세션에 저장해둬야, 결과표에서 행을 선택해서 다시 그려질 때도(run_btn=False인 순간에도)
-    # 아래 표시 블록이 이 결과를 계속 보여줄 수 있음
-    st.session_state["last_output_df"] = output_df
-    st.session_state["_select_all_value"] = False
-    st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
-    # 검색 완료 즉시 다시 실행해서, 필터가 메인 화면(검색 전)에서 사이드바(검색 후)로 바로 전환되게 함
-    st.rerun()
+    st.stop()  # 팝업이 떠 있는 동안 아래 코드가 먼저 실행되지 않도록 함
 
 if "last_output_df" in st.session_state:
     output_df = st.session_state["last_output_df"]
 
     st.success(f"최종 {len(output_df)}개사")
+
+    _no_data_df = st.session_state.get("_no_data_df")
+    if _no_data_df is not None and not _no_data_df.empty:
+        with st.expander(f"⚠️ 매출 데이터를 못 가져온 상장사 {len(_no_data_df)}개 (클릭해서 보기)"):
+            st.dataframe(_no_data_df, use_container_width=True)
 
     def normalize_url(u):
         if not isinstance(u, str) or not u.strip():
@@ -1085,6 +1118,7 @@ if "last_output_df" in st.session_state:
             "홈페이지 주소": st.column_config.LinkColumn("홈페이지 주소", display_text="바로가기"),
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
+            "증권": st.column_config.LinkColumn("증권", display_text="정보 보기"),
         },
         key=f"results_editor_{st.session_state.get('_editor_key_counter', 0)}",
     )
@@ -1112,7 +1146,7 @@ if "last_output_df" in st.session_state:
         wb = load_workbook(buf)
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
-        link_columns = ["관련기사", "기업정보(bizno)", "홈페이지 주소"]
+        link_columns = ["관련기사", "기업정보(bizno)", "증권", "홈페이지 주소"]
         for col_name in link_columns:
             if col_name not in headers:
                 continue
