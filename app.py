@@ -660,7 +660,7 @@ with header_area:
         key="industry_select_input",
     )
     industry_keywords = col_a.text_input(
-        "업종 키워드 검색 (콤마로 구분, Enter로 바로 검색, 계단식과 별개로 전체에서 검색)", "",
+        "업종 키워드 검색 (콤마로 구분, Enter로 바로 검색)", "",
         key="industry_keywords_input",
         on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
