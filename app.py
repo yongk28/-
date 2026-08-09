@@ -685,7 +685,7 @@ with header_area:
     top_n = col_c.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
     col_c.markdown("---")
-    col_c.header("💰 매출조회 (상장사만 가능)")
+    col_c.markdown("**💰 매출조회 (상장사만 가능)**")
     col_c.caption("매출 / 영업이익 / 당기순이익이 표시됩니다.")
     fetch_revenue = col_c.checkbox("매출/영업이익/순이익도 같이 조회하기 (API 키 필요, 상장사만 해당)", value=False)
     api_key = ""
@@ -718,7 +718,7 @@ with header_area:
         max_workers = col_c.number_input("동시 요청 수", 1, 30, 10)
 
     col_c.markdown("---")
-    col_c.header("📰 최근뉴스 (참고용)")
+    col_c.markdown("**📰 최근뉴스 (참고용)**")
     col_c.caption(
         "네이버에 최근 6개월간 해당 기업 보도 뉴스를 보여주고, 제목 키워드를 분석하여 "
         "여론을 5단계(매우긍정~매우부정)로 표시합니다. "
