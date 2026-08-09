@@ -59,11 +59,26 @@ h1 {
     border-radius: 10px !important;
 }
 
-/* 입력창/드롭다운 모서리를 부드럽게 */
+/* 입력창/드롭다운: 모서리를 부드럽게 + 은은한 그림자로 살짝 떠 보이는 입체감 */
 [data-baseweb="select"] > div,
 [data-baseweb="base-input"],
 input, textarea {
     border-radius: 8px !important;
+    box-shadow: 0 1px 2px rgba(30, 58, 95, 0.06), 0 2px 6px rgba(30, 58, 95, 0.07) !important;
+    border: 1px solid rgba(30, 58, 95, 0.10) !important;
+    transition: box-shadow 0.15s ease;
+}
+[data-baseweb="select"] > div:focus-within,
+[data-baseweb="base-input"]:focus-within,
+input:focus, textarea:focus {
+    box-shadow: 0 2px 8px rgba(30, 58, 95, 0.14) !important;
+    border: 1px solid rgba(184, 134, 63, 0.55) !important;
+}
+
+/* number_input의 +/- 버튼 영역도 같은 톤으로 둥글게 */
+[data-testid="stNumberInputContainer"] {
+    border-radius: 8px !important;
+    box-shadow: 0 1px 2px rgba(30, 58, 95, 0.06), 0 2px 6px rgba(30, 58, 95, 0.07) !important;
 }
 
 /* 버튼: 모서리를 부드럽게, 호버 시 미세한 그림자 */
