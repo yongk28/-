@@ -47,20 +47,16 @@ h1 {
     padding-top: 0.2rem !important;
 }
 
-/* 필터 조건 카드: 남색 포인트 라인 + 확실하게 떠 보이는 레이어드 그림자
-   (컨테이너에 key="filter_box"를 줘서 생성되는 .st-key-filter_box 클래스를 이용 - data-testid보다 안정적) */
-.st-key-filter_box,
-.st-key-filter_box > div,
-.st-key-filter_box [data-testid="stVerticalBlockBorderWrapper"] {
+/* 필터 조건 카드: 박스 전체를 띄우는 대신, 테두리 선 자체에만 은은한 입체감(베벨) 부여 */
+[data-testid="stVerticalBlockBorderWrapper"] {
     border-radius: 16px !important;
     border-top: 4px solid #1E3A5F !important;
-    border-left: 1px solid rgba(30, 41, 59, 0.05) !important;
-    border-right: 1px solid rgba(30, 41, 59, 0.05) !important;
-    border-bottom: 1px solid rgba(30, 41, 59, 0.05) !important;
+    border-left: 1px solid rgba(30, 41, 59, 0.18) !important;
+    border-right: 1px solid rgba(30, 41, 59, 0.22) !important;
+    border-bottom: 1px solid rgba(30, 41, 59, 0.25) !important;
     box-shadow:
-        0 1px 2px rgba(30, 41, 59, 0.06),
-        0 10px 24px rgba(30, 41, 59, 0.10),
-        0 24px 48px rgba(30, 41, 59, 0.07) !important;
+        inset 0 1px 0 rgba(255, 255, 255, 0.9),
+        0 1px 2px rgba(30, 41, 59, 0.10) !important;
     background: #FFFFFF !important;
 }
 
@@ -709,7 +705,7 @@ if show_results:
     col_a = col_b = col_c = st.sidebar
 else:
     # 처음 켰을 때(검색 전)는 필터를 메인 화면에 3열로 넓게 배치
-    header_area = st.container(border=True, key="filter_box")
+    header_area = st.container(border=True)
 
 with header_area:
     if show_results:
