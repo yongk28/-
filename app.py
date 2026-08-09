@@ -570,8 +570,13 @@ daebunryu_options = [x for x in _order if x in _present]
 if "pending_industry_search" in st.session_state:
     _picked = st.session_state.pop("pending_industry_search")  # 업종명 리스트
 
-    # 회사명 검색이 남아있으면 업종 필터를 건너뛰게 되므로 비워줌
+    # 이전 검색에 남아있던 다른 필터들이 AND 조건으로 계속 걸려서 결과가 이상해지는 걸 막기 위해
+    # 업종 재검색 시에는 관련 없는 필터를 전부 초기화함
     st.session_state["company_name_search_input"] = ""
+    st.session_state["ceo_name_search_input"] = ""
+    st.session_state["corp_type_filter_input"] = []
+    st.session_state["region_filter_input"] = ""
+    st.session_state["min_founding_year_input"] = 0
 
     # 계단식 필터(대/중/소분류)에도 정확히 반영
     _picked_in_map = [nm for nm in _picked if nm in hierarchy_map]
@@ -1009,7 +1014,8 @@ if "last_output_df" in st.session_state:
         st.caption("표 왼쪽 '선택' 칸에 체크하면, 그 회사(들)의 업종으로 재검색할 수 있습니다.")
 
     buf = io.BytesIO()
-    output_df.to_excel(buf, index=False)
+    export_df = output_df.loc[checked.index] if not checked.empty else output_df
+    export_df.to_excel(buf, index=False)
     buf.seek(0)
 
     # 관련기사/기업정보(bizno)/홈페이지 주소 컬럼을 실제 클릭 가능한 하이퍼링크로 변환
@@ -1034,8 +1040,12 @@ if "last_output_df" in st.session_state:
     except Exception:
         buf.seek(0)  # 하이퍼링크 변환 실패해도 기본 엑셀은 그대로 다운로드되게 둠
 
+    download_label = (
+        f"📥 체크한 {len(export_df)}개사만 엑셀로 다운로드"
+        if not checked.empty else "📥 전체 엑셀로 다운로드"
+    )
     st.download_button(
-        "📥 엑셀로 다운로드",
+        download_label,
         data=buf.getvalue(),
         file_name="screener_result.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
