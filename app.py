@@ -690,9 +690,10 @@ with header_area:
     top_n = col_c.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
     col_c.markdown("---")
-    col_c.markdown("**💰 매출조회 (상장사만 가능)**")
+    _rev_title, _rev_check = col_c.columns([4, 1])
+    _rev_title.markdown("**💰 매출조회 (상장사만 가능)**")
+    fetch_revenue = _rev_check.checkbox("매출조회", value=False, label_visibility="collapsed")
     col_c.caption("매출 / 영업이익 / 당기순이익이 표시됩니다.")
-    fetch_revenue = col_c.checkbox("매출/영업이익/순이익도 같이 조회하기 (API 키 필요, 상장사만 해당)", value=False)
     api_key = ""
     bsns_year = "2025"
     min_rev = max_rev = min_op = max_op = min_ni = max_ni = None
@@ -723,12 +724,13 @@ with header_area:
         max_workers = col_c.number_input("동시 요청 수", 1, 30, 10)
 
     col_c.markdown("---")
-    col_c.markdown("**📰 최근뉴스 (참고용)**")
+    _news_title, _news_check = col_c.columns([4, 1])
+    _news_title.markdown("**📰 최근뉴스 (참고용)**")
+    fetch_titles = _news_check.checkbox("최근뉴스", value=False, label_visibility="collapsed")
     col_c.caption(
         "최근 6개월 네이버에 보도된 뉴스의 키워드를 분석하여, 기사 논조를 5단계 (매우긍정~매우부정)로 표시합니다.\n\n"
         "한경, 매경 등 10개 경제지 매체 보도 여부를 나타냅니다."
     )
-    fetch_titles = col_c.checkbox("최근 뉴스 제목 + 여론 확인하기 (NAVER API HUB 키 필요)", value=False)
     naver_client_id = ""
     naver_client_secret = ""
     if fetch_titles:
