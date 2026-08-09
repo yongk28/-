@@ -33,6 +33,14 @@ st.markdown("""
     transform-origin: left center;
 }
 
+/* "전체 선택/해제" 체크박스는 위 확대 규칙에서 제외하고, 표 글자 크기와 비슷하게 작게 */
+.st-key-select_all_container [data-testid="stCheckbox"] {
+    transform: none;
+}
+.st-key-select_all_container [data-testid="stCheckbox"] label p {
+    font-size: 14px !important;
+}
+
 /* 메인 타이틀 - 여백/자간 정리 */
 h1 {
     letter-spacing: -0.02em;
@@ -1052,7 +1060,8 @@ if "last_output_df" in st.session_state:
             display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
     _prev_toggle = st.session_state.get("_select_all_value", False)
-    select_all_toggle = st.toggle("전체 선택 / 전체 해제", value=_prev_toggle)
+    with st.container(key="select_all_container"):
+        select_all_toggle = st.checkbox("전체 선택 / 전체 해제", value=_prev_toggle)
     if select_all_toggle != _prev_toggle:
         st.session_state["_select_all_value"] = select_all_toggle
         st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
