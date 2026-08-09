@@ -609,7 +609,17 @@ if st.session_state.get("pending_reset_filters", False):
         st.session_state[k] = v
     st.session_state["pending_reset_filters"] = False
 
-with st.sidebar:
+show_results = "last_output_df" in st.session_state
+
+if show_results:
+    # 검색 결과가 있으면 필터는 사이드바로 (결과 화면을 넓게 쓰기 위해)
+    header_area = st.sidebar
+    col_a = col_b = col_c = st.sidebar
+else:
+    # 처음 켰을 때(검색 전)는 필터를 메인 화면에 3열로 넓게 배치
+    header_area = st.container(border=True)
+
+with header_area:
     st.header("🔎 필터 조건")
     st.caption("업종 대분류→중분류→소분류를 계단식으로 좁히거나, 바로 아래 키워드 검색으로 넓게 찾을 수 있습니다.")
 
@@ -618,14 +628,17 @@ with st.sidebar:
         st.session_state.pop("last_output_df", None)
         st.rerun()
 
-    daebunryu_select = st.multiselect(
+    if not show_results:
+        col_a, col_b, col_c = st.columns(3)
+
+    daebunryu_select = col_a.multiselect(
         "1단계: 업종 대분류", options=daebunryu_options, default=[],
         key="daebunryu_select_input",
     )
     _pool = [nm for nm, h in hierarchy_map.items() if not daebunryu_select or h['대분류'] in daebunryu_select]
 
     jungbunryu_options = sorted(set(hierarchy_map[nm]['중분류'] for nm in _pool))
-    jungbunryu_select = st.multiselect(
+    jungbunryu_select = col_a.multiselect(
         "2단계: 중분류", options=jungbunryu_options, default=[],
         key="jungbunryu_select_input",
     )
@@ -633,48 +646,48 @@ with st.sidebar:
         _pool = [nm for nm in _pool if hierarchy_map[nm]['중분류'] in jungbunryu_select]
 
     sobunryu_options = sorted(set(hierarchy_map[nm]['소분류'] for nm in _pool))
-    sobunryu_select = st.multiselect(
+    sobunryu_select = col_a.multiselect(
         "3단계: 소분류", options=sobunryu_options, default=[],
         key="sobunryu_select_input",
     )
     if sobunryu_select:
         _pool = [nm for nm in _pool if hierarchy_map[nm]['소분류'] in sobunryu_select]
 
-    industry_select = st.multiselect(
+    industry_select = col_a.multiselect(
         "4단계: 업종 선택 (DART 정밀 업종명)",
         options=sorted(set(_pool) | set(st.session_state.get("industry_select_input", []))),
         default=[],
         key="industry_select_input",
     )
-    industry_keywords = st.text_input(
+    industry_keywords = col_a.text_input(
         "업종 키워드 검색 (콤마로 구분, Enter로 바로 검색, 계단식과 별개로 전체에서 검색)", "",
         key="industry_keywords_input",
         on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
-    company_name_search = st.text_input(
+    company_name_search = col_b.text_input(
         "회사명 검색 (콤마로 여러 개 가능, Enter로 바로 검색)", "",
         key="company_name_search_input",
         on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
-    ceo_name_search = st.text_input(
+    ceo_name_search = col_b.text_input(
         "대표자명 검색 (Enter로 바로 검색)", "", key="ceo_name_search_input",
         on_change=lambda: st.session_state.update({"enter_pressed_search": True}),
     )
-    corp_type_filter = st.multiselect(
+    corp_type_filter = col_b.multiselect(
         "법인구분", options=corp_type_options, default=[],
         help="코스피/코스닥/코넥스 = 상장사, 비상장 = 외감대상 비상장법인",
         key="corp_type_filter_input",
     )
-    region_filter = st.text_input("본사 지역 (예: 서울)", "", key="region_filter_input")
-    min_founding_year = st.number_input(
+    region_filter = col_b.text_input("본사 지역 (예: 서울)", "", key="region_filter_input")
+    min_founding_year = col_b.number_input(
         "설립연도 (이후 설립된 기업만, 0=필터 없음)", 0, 2100, 0, key="min_founding_year_input"
     )
-    top_n = st.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
+    top_n = col_c.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
-    st.markdown("---")
-    st.header("💰 매출조회 (상장사만 가능)")
-    st.caption("매출 / 영업이익 / 당기순이익이 표시됩니다.")
-    fetch_revenue = st.checkbox("매출/영업이익/순이익도 같이 조회하기 (API 키 필요, 상장사만 해당)", value=False)
+    col_c.markdown("---")
+    col_c.header("💰 매출조회 (상장사만 가능)")
+    col_c.caption("매출 / 영업이익 / 당기순이익이 표시됩니다.")
+    fetch_revenue = col_c.checkbox("매출/영업이익/순이익도 같이 조회하기 (API 키 필요, 상장사만 해당)", value=False)
     api_key = ""
     bsns_year = "2025"
     min_rev = max_rev = min_op = max_op = min_ni = max_ni = None
@@ -686,32 +699,32 @@ with st.sidebar:
             _secret_key = ""
         if _secret_key:
             api_key = _secret_key
-            st.caption("✅ 저장된 API 키를 사용합니다 (Secrets에 등록됨)")
+            col_c.caption("✅ 저장된 API 키를 사용합니다 (Secrets에 등록됨)")
         else:
-            api_key = st.text_input("OpenDART API 키", type="password")
-        bsns_year = st.text_input("조회 사업연도", "2025")
-        st.markdown("**매출액(억원)**")
-        c1, c2 = st.columns(2)
+            api_key = col_c.text_input("OpenDART API 키", type="password")
+        bsns_year = col_c.text_input("조회 사업연도", "2025")
+        col_c.markdown("**매출액(억원)**")
+        c1, c2 = col_c.columns(2)
         min_rev = c1.number_input("최소", value=0, step=100, key="min_rev")
         max_rev = c2.number_input("최대", value=10000000, step=100, key="max_rev")
-        st.markdown("**영업이익(억원)**")
-        c1, c2 = st.columns(2)
+        col_c.markdown("**영업이익(억원)**")
+        c1, c2 = col_c.columns(2)
         min_op = c1.number_input("최소", value=-10000000, step=100, key="min_op")
         max_op = c2.number_input("최대", value=10000000, step=100, key="max_op")
-        st.markdown("**당기순이익(억원)**")
-        c1, c2 = st.columns(2)
+        col_c.markdown("**당기순이익(억원)**")
+        c1, c2 = col_c.columns(2)
         min_ni = c1.number_input("최소", value=-10000000, step=100, key="min_ni")
         max_ni = c2.number_input("최대", value=10000000, step=100, key="max_ni")
-        max_workers = st.number_input("동시 요청 수", 1, 30, 10)
+        max_workers = col_c.number_input("동시 요청 수", 1, 30, 10)
 
-    st.markdown("---")
-    st.header("📰 최근뉴스 (참고용)")
-    st.caption(
+    col_c.markdown("---")
+    col_c.header("📰 최근뉴스 (참고용)")
+    col_c.caption(
         "네이버에 최근 6개월간 해당 기업 보도 뉴스를 보여주고, 제목 키워드를 분석하여 "
         "여론을 5단계(매우긍정~매우부정)로 표시합니다. "
         "한경, 매경 등 10개 경제지 매체에 보도여부를 나타냅니다."
     )
-    fetch_titles = st.checkbox("최근 뉴스 제목 + 여론 확인하기 (NAVER API HUB 키 필요)", value=False)
+    fetch_titles = col_c.checkbox("최근 뉴스 제목 + 여론 확인하기 (NAVER API HUB 키 필요)", value=False)
     naver_client_id = ""
     naver_client_secret = ""
     if fetch_titles:
@@ -722,11 +735,11 @@ with st.sidebar:
             _secret_id, _secret_secret = "", ""
         if _secret_id and _secret_secret:
             naver_client_id, naver_client_secret = _secret_id, _secret_secret
-            st.caption("✅ 저장된 NAVER API 키를 사용합니다 (Secrets에 등록됨)")
+            col_c.caption("✅ 저장된 NAVER API 키를 사용합니다 (Secrets에 등록됨)")
         else:
-            naver_client_id = st.text_input("NAVER API HUB Client ID")
-            naver_client_secret = st.text_input("NAVER API HUB Client Secret", type="password")
-            st.caption("ncloud.com → NAVER API HUB → 뉴스 검색 API 신청 후 발급받을 수 있습니다.")
+            naver_client_id = col_c.text_input("NAVER API HUB Client ID")
+            naver_client_secret = col_c.text_input("NAVER API HUB Client Secret", type="password")
+            col_c.caption("ncloud.com → NAVER API HUB → 뉴스 검색 API 신청 후 발급받을 수 있습니다.")
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
@@ -942,6 +955,8 @@ if run_btn:
     # 결과를 세션에 저장해둬야, 결과표에서 행을 선택해서 다시 그려질 때도(run_btn=False인 순간에도)
     # 아래 표시 블록이 이 결과를 계속 보여줄 수 있음
     st.session_state["last_output_df"] = output_df
+    # 검색 완료 즉시 다시 실행해서, 필터가 메인 화면(검색 전)에서 사이드바(검색 후)로 바로 전환되게 함
+    st.rerun()
 
 if "last_output_df" in st.session_state:
     output_df = st.session_state["last_output_df"]
