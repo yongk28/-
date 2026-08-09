@@ -47,16 +47,26 @@ h1 {
     padding-top: 0.2rem !important;
 }
 
-/* 필터 조건 카드: 남색 포인트 라인 + 은은한 그림자로 카드감 부여 */
+/* 필터 조건 카드: 남색 포인트 라인 + 확실하게 떠 보이는 레이어드 그림자 */
 [data-testid="stVerticalBlockBorderWrapper"] {
-    border-radius: 14px !important;
+    border-radius: 16px !important;
     border-top: 4px solid #1E3A5F !important;
-    box-shadow: 0 2px 10px rgba(30, 41, 59, 0.06);
+    border-left: 1px solid rgba(30, 41, 59, 0.05) !important;
+    border-right: 1px solid rgba(30, 41, 59, 0.05) !important;
+    border-bottom: 1px solid rgba(30, 41, 59, 0.05) !important;
+    box-shadow:
+        0 1px 2px rgba(30, 41, 59, 0.06),
+        0 10px 24px rgba(30, 41, 59, 0.10),
+        0 24px 48px rgba(30, 41, 59, 0.07) !important;
+    background: #FFFFFF !important;
 }
 
-/* 안내 배너(파란 정보 박스) */
+/* 안내 배너(파란 정보 박스)도 같은 톤으로 살짝 떠 보이게 */
 [data-testid="stAlertContainer"] {
-    border-radius: 10px !important;
+    border-radius: 12px !important;
+    box-shadow:
+        0 1px 2px rgba(30, 41, 59, 0.05),
+        0 6px 16px rgba(30, 41, 59, 0.08) !important;
 }
 
 /* 입력창/드롭다운: 모서리를 부드럽게 + 은은한 그림자로 살짝 떠 보이는 입체감 */
