@@ -63,19 +63,27 @@ h1 {
         0 6px 16px rgba(30, 41, 59, 0.08) !important;
 }
 
-/* 입력창/드롭다운: 모서리를 부드럽게 + 은은한 그림자로 살짝 떠 보이는 입체감 + 높이 통일 */
+/* 입력창/드롭다운: 모서리를 부드럽게 + 은은한 그림자로 살짝 떠 보이는 입체감 + 가로/세로 크기 통일
+   (raw input 태그가 아니라 바깥 박스(data-baseweb)에만 스타일을 줘야 기존 테두리와 안 겹침) */
+[data-testid="stTextInput"], [data-testid="stTextInput"] > div,
+[data-testid="stMultiSelect"], [data-testid="stMultiSelect"] > div,
+[data-testid="stSelectbox"], [data-testid="stSelectbox"] > div,
+[data-testid="stNumberInput"], [data-testid="stNumberInput"] > div {
+    width: 100% !important;
+}
 [data-baseweb="select"] > div,
-[data-baseweb="base-input"],
-input, textarea {
+[data-baseweb="base-input"] {
     border-radius: 8px !important;
     box-shadow: 0 1px 2px rgba(30, 58, 95, 0.06), 0 2px 6px rgba(30, 58, 95, 0.07) !important;
     border: 1px solid rgba(30, 58, 95, 0.10) !important;
     transition: box-shadow 0.15s ease;
     min-height: 44px !important;
+    width: 100% !important;
+    display: flex !important;
+    align-items: center !important;
 }
 [data-baseweb="select"] > div:focus-within,
-[data-baseweb="base-input"]:focus-within,
-input:focus, textarea:focus {
+[data-baseweb="base-input"]:focus-within {
     box-shadow: 0 2px 8px rgba(30, 58, 95, 0.14) !important;
     border: 1px solid rgba(184, 134, 63, 0.55) !important;
 }
