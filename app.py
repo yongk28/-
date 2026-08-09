@@ -725,9 +725,8 @@ with header_area:
     col_c.markdown("---")
     col_c.markdown("**📰 최근뉴스 (참고용)**")
     col_c.caption(
-        "네이버에 최근 6개월간 해당 기업 보도 뉴스를 보여주고, 제목 키워드를 분석하여 "
-        "여론을 5단계(매우긍정~매우부정)로 표시합니다. "
-        "한경, 매경 등 10개 경제지 매체에 보도여부를 나타냅니다."
+        "최근 6개월 네이버에 보도된 뉴스의 키워드를 분석하여, 기사 논조를 5단계 (매우긍정~매우부정)로 표시합니다.\n\n"
+        "한경, 매경 등 10개 경제지 매체 보도 여부를 나타냅니다."
     )
     fetch_titles = col_c.checkbox("최근 뉴스 제목 + 여론 확인하기 (NAVER API HUB 키 필요)", value=False)
     naver_client_id = ""
@@ -950,8 +949,8 @@ if run_btn:
     _desired_order = [
         '회사명', '대표상품/브랜드', '기업정보(bizno)', '홈페이지 주소', '관련기사',
         '뉴스여론', '경제지 보도(10개 매체)',
-        '대분류', '업종', '법인구분', '대표자명',
-        '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '설립연도', '본사 위치',
+        '대분류', '업종', '법인구분',
+        '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '대표자명', '설립연도', '본사 위치',
     ]
     _final_order = [c for c in _desired_order if c in output_df.columns]
     _final_order += [c for c in output_df.columns if c not in _final_order]
@@ -960,6 +959,8 @@ if run_btn:
     # 결과를 세션에 저장해둬야, 결과표에서 행을 선택해서 다시 그려질 때도(run_btn=False인 순간에도)
     # 아래 표시 블록이 이 결과를 계속 보여줄 수 있음
     st.session_state["last_output_df"] = output_df
+    st.session_state["_select_all_value"] = False
+    st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
     # 검색 완료 즉시 다시 실행해서, 필터가 메인 화면(검색 전)에서 사이드바(검색 후)로 바로 전환되게 함
     st.rerun()
 
@@ -982,8 +983,18 @@ if "last_output_df" in st.session_state:
     for col in ['매출액(억원)', '영업이익(억원)', '당기순이익(억원)']:
         display_df[col] = display_df[col].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
 
+    sel_col1, sel_col2, _ = st.columns([1, 1, 6])
+    if sel_col1.button("☑️ 전체 선택", use_container_width=True):
+        st.session_state["_select_all_value"] = True
+        st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
+        st.rerun()
+    if sel_col2.button("⬜ 전체 해제", use_container_width=True):
+        st.session_state["_select_all_value"] = False
+        st.session_state["_editor_key_counter"] = st.session_state.get("_editor_key_counter", 0) + 1
+        st.rerun()
+
     editor_df = display_df.copy()
-    editor_df.insert(0, '선택', False)
+    editor_df.insert(0, '선택', st.session_state.get("_select_all_value", False))
 
     edited_df = st.data_editor(
         editor_df,
@@ -998,7 +1009,7 @@ if "last_output_df" in st.session_state:
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
         },
-        key="results_editor",
+        key=f"results_editor_{st.session_state.get('_editor_key_counter', 0)}",
     )
 
     checked = edited_df[edited_df['선택']]
