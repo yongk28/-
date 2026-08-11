@@ -1140,14 +1140,23 @@ if "last_output_df" in st.session_state:
     export_df.to_excel(buf, index=False)
     buf.seek(0)
 
-    # 관련기사/기업정보(bizno)/홈페이지 주소 컬럼을 실제 클릭 가능한 하이퍼링크로 변환
+    # 서식 개선: 링크 컬럼은 보기 좋은 문구+하이퍼링크로, 헤더는 연두색 배경, 값 있는 셀은 전체 테두리
     try:
         from openpyxl import load_workbook
+        from openpyxl.styles import PatternFill, Border, Side
+
         wb = load_workbook(buf)
         ws = wb.active
         headers = [cell.value for cell in ws[1]]
-        link_columns = ["관련기사", "기업정보(bizno)", "증권", "홈페이지 주소"]
-        for col_name in link_columns:
+
+        # 1) 링크 컬럼: 원래 주소는 하이퍼링크로 걸고, 셀에는 화면과 같은 짧은 문구만 표시
+        link_display_text = {
+            "관련기사": "기사보기",
+            "기업정보(bizno)": "상세보기",
+            "증권": "정보 보기",
+            "홈페이지 주소": "바로가기",
+        }
+        for col_name, display_text in link_display_text.items():
             if col_name not in headers:
                 continue
             col_idx = headers.index(col_name) + 1
@@ -1156,11 +1165,26 @@ if "last_output_df" in st.session_state:
                 url = cell.value
                 if url and isinstance(url, str) and url.strip():
                     cell.hyperlink = url
+                    cell.value = display_text
                     cell.style = "Hyperlink"
+
+        # 2) 맨 윗줄(헤더) 배경을 연한 초록으로
+        header_fill = PatternFill(start_color="D9F2D9", end_color="D9F2D9", fill_type="solid")
+        for cell in ws[1]:
+            cell.fill = header_fill
+
+        # 3) 값이 있는 셀에는 전부 테두리 적용
+        thin_side = Side(style="thin", color="B0B0B0")
+        thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=len(headers)):
+            for cell in row:
+                if cell.value is not None and str(cell.value).strip() != '':
+                    cell.border = thin_border
+
         buf = io.BytesIO()
         wb.save(buf)
     except Exception:
-        buf.seek(0)  # 하이퍼링크 변환 실패해도 기본 엑셀은 그대로 다운로드되게 둠
+        buf.seek(0)  # 서식 변환 실패해도 기본 엑셀은 그대로 다운로드되게 둠
 
     download_label = (
         f"📥 체크한 {len(export_df)}개사만 엑셀로 다운로드"
