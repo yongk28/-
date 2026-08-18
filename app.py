@@ -313,53 +313,6 @@ def load_dart_full_registry():
     return df
 
 
-FTC_REGIONS = [
-    '서울특별시', '부산광역시', '대구광역시', '인천광역시', '광주광역시', '대전광역시',
-    '울산광역시', '세종특별자치시', '경기도', '강원특별자치도', '충청북도', '충청남도',
-    '전북특별자치도', '전라남도', '경상북도', '경상남도', '제주특별자치도',
-]
-
-
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
-def load_ftc_bizcomm_registry():
-    """공정거래위원회 '통신판매사업자' 전체 명단을 지역별로 나눠 받아서 하나로 합친다.
-    사업자등록번호(숫자만) 집합을 돌려주며, 이 안에 있으면 통신판매업 등록된 것으로 본다.
-    지역들을 병렬로 받고, 지역 하나가 실패해도(느려도) 빨리 포기하고 나머지는 계속 진행한다."""
-    url = "https://www.ftc.go.kr/www/downloadBizComm.do"
-
-    def _fetch_region(region):
-        session = make_session(total=1, backoff_factor=0.5)
-        filename = f"통신판매사업자_ALL_{region} 전체.csv"
-        params = {"atchFileUrl": "dataopen", "atchFileNm": filename}
-        try:
-            resp = session.get(url, params=params, timeout=(10, 20))
-            resp.raise_for_status()
-            content = resp.content
-            for enc in ('cp949', 'euc-kr', 'utf-8-sig', 'utf-8'):
-                try:
-                    df = pd.read_csv(io.BytesIO(content), encoding=enc)
-                    if '사업자등록번호' in df.columns:
-                        return region, df['사업자등록번호'].astype(str).str.replace(r'\D', '', regex=True)
-                except Exception:
-                    continue
-            return region, None
-        except Exception:
-            return region, None
-
-    brnos = set()
-    ok_regions = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(_fetch_region, r) for r in FTC_REGIONS]
-        for fut in as_completed(futures):
-            region, digits = fut.result()
-            if digits is not None:
-                brnos.update(d for d in digits if len(d) == 10)
-                ok_regions.append(region)
-    if not ok_regions:
-        raise RuntimeError("통신판매업 등록 자료를 하나도 못 받아왔습니다 (지역 17개 전부 실패).")
-    return brnos, ok_regions
-
-
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
 def load_kind_key_products():
     """KRX KIND 상장법인목록에서 '주요제품' 텍스트만 가져온다 (상장사 대상, 브랜드명이 섞여 있는 경우가 많음).
@@ -698,14 +651,11 @@ def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max
 
     output_df['증권'] = final['종목코드'].apply(naver_finance_url)
 
-    def ftc_biz_url(row):
-        brno = row['사업자등록번호']
+    def ftc_biz_url(brno):
         digits = re.sub(r'\D', '', str(brno)) if pd.notna(brno) else ''
-        if len(digits) != 10 or not row.get('통신판매업_등록', False):
-            return None
-        return f"http://www.ftc.go.kr/bizCommPop.do?wrkr_no={digits}"
+        return f"http://www.ftc.go.kr/bizCommPop.do?wrkr_no={digits}" if len(digits) == 10 else None
 
-    output_df['통신판매업조회'] = final.apply(ftc_biz_url, axis=1)
+    output_df['통신판매업조회'] = final['사업자등록번호'].apply(ftc_biz_url)
 
     output_df['대분류'] = final['대분류']
     output_df['대표상품/브랜드'] = final['대표상품_브랜드']
@@ -849,17 +799,6 @@ _order = [nm for nm, _, _ in DAEBUNRYU_RANGES] + ['미분류']
 _present = set(v['대분류'] for v in hierarchy_map.values())
 daebunryu_options = [x for x in _order if x in _present]
 
-with st.spinner("통신판매업 등록 명단 불러오는 중... (최초 1회, 지역 17개라 1~2분 걸릴 수 있습니다)"):
-    try:
-        _ftc_brnos, _ftc_ok_regions = load_ftc_bizcomm_registry()
-        ftc_load_error = None
-    except Exception as e:
-        _ftc_brnos = set()
-        _ftc_ok_regions = []
-        ftc_load_error = str(e)
-registry_df['_brno_digits'] = registry_df['사업자등록번호'].astype(str).str.replace(r'\D', '', regex=True)
-registry_df['통신판매업_등록'] = registry_df['_brno_digits'].isin(_ftc_brnos)
-
 # 결과표 아래 "재검색" 버튼에서 넘어온 값이 있으면, 위젯이 그려지기 전에 미리 반영
 if "pending_industry_search" in st.session_state:
     _picked = st.session_state.pop("pending_industry_search")  # 업종명 리스트
@@ -994,10 +933,6 @@ with header_area:
     min_founding_year = col_b.number_input(
         "설립연도 (이후 설립된 기업만, 0=필터 없음)", 0, 2100, 0, key="min_founding_year_input"
     )
-    if ftc_load_error:
-        col_b.caption(f"⚠️ 통신판매업 명단을 못 가져왔습니다: {ftc_load_error}")
-    elif len(_ftc_ok_regions) < len(FTC_REGIONS):
-        col_b.caption(f"⚠️ 통신판매업 명단 중 {len(_ftc_ok_regions)}/{len(FTC_REGIONS)}개 지역만 불러와졌습니다 (일부 지역 누락 가능).")
     top_n = col_c.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
     col_c.markdown("---")
