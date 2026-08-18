@@ -313,6 +313,48 @@ def load_dart_full_registry():
     return df
 
 
+FTC_REGIONS = [
+    '서울특별시', '부산광역시', '대구광역시', '인천광역시', '광주광역시', '대전광역시',
+    '울산광역시', '세종특별자치시', '경기도', '강원특별자치도', '충청북도', '충청남도',
+    '전북특별자치도', '전라남도', '경상북도', '경상남도', '제주특별자치도',
+]
+
+
+@st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
+def load_ftc_bizcomm_registry():
+    """공정거래위원회 '통신판매사업자' 전체 명단을 지역별로 나눠 받아서 하나로 합친다.
+    사업자등록번호(숫자만) 집합을 돌려주며, 이 안에 있으면 통신판매업 등록된 것으로 본다.
+    지역 하나가 실패해도 나머지는 계속 진행 (일부 누락 가능성은 있음)."""
+    session = make_session(total=2, backoff_factor=1.0)
+    url = "https://www.ftc.go.kr/www/downloadBizComm.do"
+    brnos = set()
+    ok_regions = []
+    for region in FTC_REGIONS:
+        filename = f"통신판매사업자_ALL_{region} 전체.csv"
+        params = {"atchFileUrl": "dataopen", "atchFileNm": filename}
+        try:
+            resp = session.get(url, params=params, timeout=(20, 60))
+            resp.raise_for_status()
+            content = resp.content
+            df = None
+            for enc in ('cp949', 'euc-kr', 'utf-8-sig', 'utf-8'):
+                try:
+                    df = pd.read_csv(io.BytesIO(content), encoding=enc)
+                    break
+                except Exception:
+                    df = None
+            if df is None or '사업자등록번호' not in df.columns:
+                continue
+            digits = df['사업자등록번호'].astype(str).str.replace(r'\D', '', regex=True)
+            brnos.update(d for d in digits if len(d) == 10)
+            ok_regions.append(region)
+        except Exception:
+            continue
+    if not ok_regions:
+        raise RuntimeError("통신판매업 등록 자료를 하나도 못 받아왔습니다 (지역 17개 전부 실패).")
+    return brnos, ok_regions
+
+
 @st.cache_data(show_spinner=False, ttl=60 * 60 * 24)
 def load_kind_key_products():
     """KRX KIND 상장법인목록에서 '주요제품' 텍스트만 가져온다 (상장사 대상, 브랜드명이 섞여 있는 경우가 많음).
@@ -455,35 +497,6 @@ def load_corp_map(api_key: str):
     return corp_map
 
 
-@st.cache_data(show_spinner=False, ttl=60 * 60 * 24 * 7)
-def get_online_seller_status(service_key: str, brno: str):
-    """공정거래위원회 '통신판매사업자 등록상세 제공 서비스'로 등록 여부를 확인한다.
-    회사(사업자등록번호)당 결과를 7일간 캐시해서 같은 회사가 다시 나와도 API를 다시 부르지 않는다."""
-    from urllib.parse import unquote
-    url = "https://apis.data.go.kr/1130000/MllBsDtl_3Service/getMllBsInfoDetail_3"
-    # 포털에서 이미 URL 인코딩된 키를 붙여넣는 경우가 많아, 먼저 디코딩해서
-    # requests가 정상적으로 한 번만 인코딩하도록 함 (이중 인코딩 방지)
-    clean_key = unquote(service_key.strip())
-    params = {
-        "serviceKey": clean_key,
-        "pageNo": 1,
-        "numOfRows": 1,
-        "resultType": "json",
-        "brno": brno,
-    }
-    try:
-        RATE_LIMITER.wait()
-        r = requests.get(url, params=params, timeout=15)
-        data = r.json()
-        body = data.get("response", {}).get("body", {})
-        total_count = body.get("totalCount", 0)
-        if isinstance(total_count, str):
-            total_count = int(total_count) if total_count.strip().isdigit() else 0
-        return "등록됨" if total_count and int(total_count) > 0 else "미등록"
-    except Exception as e:
-        return f"확인 실패: {e}"
-
-
 POSITIVE_WORDS = [
     '급등', '호실적', '흑자', '수주', '성장', '역대', '최대', '호평', '선정', '1위',
     '개선', '반등', '상승', '투자유치', '신기록', '돌파', '확대', '진출', '체결', '수출',
@@ -589,9 +602,8 @@ def get_naver_news_analysis(session, client_id, client_secret, company_name, mon
 @st.dialog("🔎 검색 처리 중", width="large")
 def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max_workers,
                                min_rev, max_rev, min_op, max_op, min_ni, max_ni, top_n,
-                               fetch_titles, naver_client_id, naver_client_secret,
-                               fetch_biz_status, ftc_service_key):
-    """검색 버튼을 누른 뒤의 모든 처리(매출조회/최근뉴스/통신판매업 확인 포함)를 화면 가운데 팝업 안에서 진행하고,
+                               fetch_titles, naver_client_id, naver_client_secret):
+    """검색 버튼을 누른 뒤의 모든 처리(매출조회/최근뉴스 포함)를 화면 가운데 팝업 안에서 진행하고,
     끝나면 결과를 세션에 저장한 뒤 다시 그림 (선택 옵션과 무관하게 항상 이 팝업을 거침)."""
     st.write(f"1차 필터 후 후보 기업 수: **{len(candidates)}**")
 
@@ -681,11 +693,14 @@ def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max
 
     output_df['증권'] = final['종목코드'].apply(naver_finance_url)
 
-    def ftc_biz_url(brno):
+    def ftc_biz_url(row):
+        brno = row['사업자등록번호']
         digits = re.sub(r'\D', '', str(brno)) if pd.notna(brno) else ''
-        return f"http://www.ftc.go.kr/bizCommPop.do?wrkr_no={digits}" if len(digits) == 10 else None
+        if len(digits) != 10 or not row.get('통신판매업_등록', False):
+            return None
+        return f"http://www.ftc.go.kr/bizCommPop.do?wrkr_no={digits}"
 
-    output_df['통신판매업조회'] = final['사업자등록번호'].apply(ftc_biz_url)
+    output_df['통신판매업조회'] = final.apply(ftc_biz_url, axis=1)
 
     output_df['대분류'] = final['대분류']
     output_df['대표상품/브랜드'] = final['대표상품_브랜드']
@@ -733,37 +748,8 @@ def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max
             output_df['뉴스여론'] = sentiment_results
             output_df['경제지 보도(10개 매체)'] = press_results
 
-    if fetch_biz_status:
-        if not ftc_service_key:
-            st.warning("통신판매업 등록 확인을 켜셨다면 공공데이터포털 인증키를 입력해주세요. (이 항목은 건너뜁니다)")
-        else:
-            st.write("**통신판매업 등록 확인**")
-            progress3 = st.progress(0.0, text="통신판매업 등록 확인 중...")
-            brnos = final['사업자등록번호'].apply(lambda x: re.sub(r'\D', '', str(x)) if pd.notna(x) else '')
-            biz_results = {}
-            executor3 = ThreadPoolExecutor(max_workers=10)
-            try:
-                future_map = {}
-                for idx, brno in zip(final.index, brnos):
-                    if len(brno) != 10:
-                        biz_results[idx] = None
-                        continue
-                    fut = executor3.submit(get_online_seller_status, ftc_service_key, brno)
-                    future_map[fut] = idx
-                done = 0
-                total = len(future_map)
-                for fut in as_completed(future_map):
-                    idx = future_map[fut]
-                    biz_results[idx] = fut.result()
-                    done += 1
-                    if total:
-                        progress3.progress(done / total, text=f"통신판매업 등록 확인 중... ({done}/{total})")
-            finally:
-                executor3.shutdown(wait=False, cancel_futures=True)
-            output_df['통신판매업 등록여부'] = output_df.index.map(biz_results)
-
     _desired_order = [
-        '회사명', '대표상품/브랜드', '기업정보(bizno)', '증권', '통신판매업조회', '통신판매업 등록여부', '홈페이지 주소', '관련기사',
+        '회사명', '대표상품/브랜드', '기업정보(bizno)', '증권', '통신판매업조회', '홈페이지 주소', '관련기사',
         '뉴스여론', '경제지 보도(10개 매체)',
         '대분류', '업종', '법인구분',
         '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '대표자명', '설립연도', '본사 위치',
@@ -857,6 +843,17 @@ registry_df['소분류'] = registry_df['업종명'].astype(str).str.strip().map(
 _order = [nm for nm, _, _ in DAEBUNRYU_RANGES] + ['미분류']
 _present = set(v['대분류'] for v in hierarchy_map.values())
 daebunryu_options = [x for x in _order if x in _present]
+
+with st.spinner("통신판매업 등록 명단 불러오는 중... (최초 1회, 지역 17개라 1~2분 걸릴 수 있습니다)"):
+    try:
+        _ftc_brnos, _ftc_ok_regions = load_ftc_bizcomm_registry()
+        ftc_load_error = None
+    except Exception as e:
+        _ftc_brnos = set()
+        _ftc_ok_regions = []
+        ftc_load_error = str(e)
+registry_df['_brno_digits'] = registry_df['사업자등록번호'].astype(str).str.replace(r'\D', '', regex=True)
+registry_df['통신판매업_등록'] = registry_df['_brno_digits'].isin(_ftc_brnos)
 
 # 결과표 아래 "재검색" 버튼에서 넘어온 값이 있으면, 위젯이 그려지기 전에 미리 반영
 if "pending_industry_search" in st.session_state:
@@ -992,6 +989,10 @@ with header_area:
     min_founding_year = col_b.number_input(
         "설립연도 (이후 설립된 기업만, 0=필터 없음)", 0, 2100, 0, key="min_founding_year_input"
     )
+    if ftc_load_error:
+        col_b.caption(f"⚠️ 통신판매업 명단을 못 가져왔습니다: {ftc_load_error}")
+    elif len(_ftc_ok_regions) < len(FTC_REGIONS):
+        col_b.caption(f"⚠️ 통신판매업 명단 중 {len(_ftc_ok_regions)}/{len(FTC_REGIONS)}개 지역만 불러와졌습니다 (일부 지역 누락 가능).")
     top_n = col_c.number_input("최대 결과 개수", 1, 2000, 200, key="top_n_input")
 
     col_c.markdown("---")
@@ -1051,13 +1052,6 @@ with header_area:
             naver_client_id = col_c.text_input("NAVER API HUB Client ID")
             naver_client_secret = col_c.text_input("NAVER API HUB Client Secret", type="password")
             col_c.caption("ncloud.com → NAVER API HUB → 뉴스 검색 API 신청 후 발급받을 수 있습니다.")
-
-    # 통신판매업 등록 확인: 사이드바에 별도 노출하지 않고, Secrets에 키가 등록되어 있으면 자동으로 켜짐
-    try:
-        ftc_service_key = st.secrets.get("FTC_SERVICE_KEY", "")
-    except Exception:
-        ftc_service_key = ""
-    fetch_biz_status = bool(ftc_service_key)
 
     run_btn_clicked = st.button("🚀 검색 실행", type="primary", use_container_width=True)
     run_btn = run_btn_clicked or st.session_state.get("enter_pressed_search", False)
@@ -1139,7 +1133,6 @@ if run_btn:
         candidates, fetch_revenue, api_key, bsns_year, max_workers,
         min_rev, max_rev, min_op, max_op, min_ni, max_ni, top_n,
         fetch_titles, naver_client_id, naver_client_secret,
-        fetch_biz_status, ftc_service_key,
     )
     st.stop()  # 팝업이 떠 있는 동안 아래 코드가 먼저 실행되지 않도록 함
 
