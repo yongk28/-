@@ -324,32 +324,37 @@ FTC_REGIONS = [
 def load_ftc_bizcomm_registry():
     """공정거래위원회 '통신판매사업자' 전체 명단을 지역별로 나눠 받아서 하나로 합친다.
     사업자등록번호(숫자만) 집합을 돌려주며, 이 안에 있으면 통신판매업 등록된 것으로 본다.
-    지역 하나가 실패해도 나머지는 계속 진행 (일부 누락 가능성은 있음)."""
-    session = make_session(total=2, backoff_factor=1.0)
+    지역들을 병렬로 받고, 지역 하나가 실패해도(느려도) 빨리 포기하고 나머지는 계속 진행한다."""
     url = "https://www.ftc.go.kr/www/downloadBizComm.do"
-    brnos = set()
-    ok_regions = []
-    for region in FTC_REGIONS:
+
+    def _fetch_region(region):
+        session = make_session(total=1, backoff_factor=0.5)
         filename = f"통신판매사업자_ALL_{region} 전체.csv"
         params = {"atchFileUrl": "dataopen", "atchFileNm": filename}
         try:
-            resp = session.get(url, params=params, timeout=(20, 60))
+            resp = session.get(url, params=params, timeout=(10, 20))
             resp.raise_for_status()
             content = resp.content
-            df = None
             for enc in ('cp949', 'euc-kr', 'utf-8-sig', 'utf-8'):
                 try:
                     df = pd.read_csv(io.BytesIO(content), encoding=enc)
-                    break
+                    if '사업자등록번호' in df.columns:
+                        return region, df['사업자등록번호'].astype(str).str.replace(r'\D', '', regex=True)
                 except Exception:
-                    df = None
-            if df is None or '사업자등록번호' not in df.columns:
-                continue
-            digits = df['사업자등록번호'].astype(str).str.replace(r'\D', '', regex=True)
-            brnos.update(d for d in digits if len(d) == 10)
-            ok_regions.append(region)
+                    continue
+            return region, None
         except Exception:
-            continue
+            return region, None
+
+    brnos = set()
+    ok_regions = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(_fetch_region, r) for r in FTC_REGIONS]
+        for fut in as_completed(futures):
+            region, digits = fut.result()
+            if digits is not None:
+                brnos.update(d for d in digits if len(d) == 10)
+                ok_regions.append(region)
     if not ok_regions:
         raise RuntimeError("통신판매업 등록 자료를 하나도 못 받아왔습니다 (지역 17개 전부 실패).")
     return brnos, ok_regions
