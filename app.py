@@ -649,7 +649,7 @@ def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max
             return None
         return f"https://finance.naver.com/item/main.naver?code={str(stock_code).strip()}"
 
-    output_df['증권'] = final['종목코드'].apply(naver_finance_url)
+    output_df['주식정보'] = final['종목코드'].apply(naver_finance_url)
 
     def ftc_biz_url(brno):
         digits = re.sub(r'\D', '', str(brno)) if pd.notna(brno) else ''
@@ -660,10 +660,10 @@ def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max
     output_df['대분류'] = final['대분류']
     output_df['대표상품/브랜드'] = final['대표상품_브랜드']
 
-    _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '증권', '통신판매업조회', '홈페이지 주소', '대분류', '업종',
+    _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '주식정보', '통신판매업조회', '홈페이지 주소', '대분류', '업종',
                   '법인구분', '대표자명', '설립연도', '본사 위치']
     if fetch_revenue:
-        _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '증권', '통신판매업조회', '홈페이지 주소', '대분류', '업종',
+        _base_cols = ['회사명', '대표상품/브랜드', '관련기사', '기업정보(bizno)', '주식정보', '통신판매업조회', '홈페이지 주소', '대분류', '업종',
                       '법인구분', '대표자명', '매출액(억원)', '영업이익(억원)', '당기순이익(억원)',
                       '설립연도', '본사 위치']
     output_df = output_df[_base_cols]
@@ -704,7 +704,7 @@ def _search_processing_dialog(candidates, fetch_revenue, api_key, bsns_year, max
             output_df['경제지 보도(10개 매체)'] = press_results
 
     _desired_order = [
-        '회사명', '대표상품/브랜드', '기업정보(bizno)', '증권', '통신판매업조회', '홈페이지 주소', '관련기사',
+        '회사명', '대표상품/브랜드', '기업정보(bizno)', '통신판매업조회', '홈페이지 주소', '주식정보', '관련기사',
         '뉴스여론', '경제지 보도(10개 매체)',
         '대분류', '업종', '법인구분',
         '매출액(억원)', '영업이익(억원)', '당기순이익(억원)', '대표자명', '설립연도', '본사 위치',
@@ -1124,7 +1124,7 @@ if "last_output_df" in st.session_state:
             "홈페이지 주소": st.column_config.LinkColumn("홈페이지 주소", display_text="바로가기"),
             "관련기사": st.column_config.LinkColumn("관련기사", display_text="기사보기"),
             "기업정보(bizno)": st.column_config.LinkColumn("기업정보(bizno)", display_text="상세보기"),
-            "증권": st.column_config.LinkColumn("증권", display_text="정보 보기"),
+            "주식정보": st.column_config.LinkColumn("주식정보", display_text="정보 보기"),
             "통신판매업조회": st.column_config.LinkColumn("통신판매업조회", display_text="확인하기"),
         },
         key=f"results_editor_{st.session_state.get('_editor_key_counter', 0)}",
@@ -1160,7 +1160,7 @@ if "last_output_df" in st.session_state:
         link_display_text = {
             "관련기사": "기사보기",
             "기업정보(bizno)": "상세보기",
-            "증권": "정보 보기",
+            "주식정보": "정보 보기",
             "통신판매업조회": "확인하기",
             "홈페이지 주소": "바로가기",
         }
